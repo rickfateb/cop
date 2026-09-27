@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>COP · Cobile</title><link rel="stylesheet" href="/style.css"></head><body>
+<header><div class="brand"><span class="mark">◉</span><div><strong>COP</strong><small>Cobile · Central de Operações</small></div></div><div class="topright"><span class="pill">Configuração inicial</span><button id="logout" class="ghost" hidden>Sair</button></div></header>
+<main>
+<section id="login" class="login panel"><div class="eyebrow">ACESSO ADMINISTRATIVO</div><h1>Central de câmeras</h1><p>Configure as unidades, os gravadores e quais imagens serão capturadas quando houver movimento.</p><form id="login-form"><label>Chave de acesso<input id="token" type="password" autocomplete="off" required placeholder="COP_ADMIN_TOKEN"></label><button class="primary">Entrar no portal</button></form><p class="hint">A chave permanece apenas nesta aba do navegador.</p></section>
+<div id="workspace" hidden>
+<div class="intro"><div><div class="eyebrow">VISÃO GERAL</div><h1>Portal COP</h1><p>Gerencie a coleta de imagens das lojas Facinho por unidade e por câmera.</p></div><button class="primary" id="add-unit">+ Nova unidade</button></div>
+<section id="stats" class="stats"></section>
+<div class="layout"><nav class="panel nav"><span class="eyebrow">UNIDADES</span><div id="unit-list"></div></nav><div class="content"><section id="overview" class="panel"></section><section id="dvr-list"></section></div></div>
+</div></main>
+<dialog id="editor"><form id="edit-form" method="dialog"><div class="dialog-head"><div><div class="eyebrow" id="dialog-kicker"></div><h2 id="dialog-title"></h2></div><button type="button" class="icon" id="close-editor" aria-label="Fechar">×</button></div><div id="fields"></div><div class="actions"><button type="button" class="ghost" id="cancel-editor">Cancelar</button><button type="submit" class="primary">Salvar configuração</button></div></form></dialog>
+<div id="toast" role="status" aria-live="polite"></div><script type="module" src="/app.js"></script></body></html>
