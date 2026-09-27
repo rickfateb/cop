@@ -2,6 +2,8 @@
 
 Portal inicial para configurar **unidades → DVRs Intelbras → câmeras → política de captura**. Cada câmera pode ser ativada separadamente, receber offsets de fotos após o início de movimento, intervalo mínimo entre eventos, duração mínima do movimento, política de encaminhamento para IA e retenção desejada.
 
+O cadastro do DVR inclui o **serial Intelbras Cloud** como identificação do equipamento. Esse campo não estabelece conexão via Cloud; o coletor de imagens ainda depende de acesso ao DVR pela rede privada da unidade.
+
 ## Estado atual
 
 O portal cadastra e persiste configurações em PostgreSQL. **Ainda não se conecta aos DVRs, não captura fotos e não envia imagens à IA.** O amarelo na linha do tempo do aplicativo Intelbras não demonstra por si só que a interface de eventos está acessível pela rede nem que o snapshot funciona em cada firmware. Essas funções dependem de validação com um aparelho real e de um coletor com acesso à rede do DVR.

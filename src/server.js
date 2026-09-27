@@ -82,13 +82,15 @@ async function route(req, res) {
     if (!models.includes(model)) throw Error('Modelo inválido.');
     const accessMode = data.access_mode;
     if (!['agent','vpn'].includes(accessMode)) throw Error('Modo de acesso inválido.');
-    const values = [unitId, nonEmpty(data.name, 'DVR'), model, optional(data.host, 255),
+    const cloudSerial = optional(data.cloud_serial, 80);
+    if (cloudSerial && !/^[A-Za-z0-9_-]+$/.test(cloudSerial)) throw Error('Serial Intelbras Cloud inválido.');
+    const values = [unitId, nonEmpty(data.name, 'DVR'), model, cloudSerial, optional(data.host, 255),
       integer(data.http_port, 'Porta HTTP', 1, 65535), accessMode, optional(data.connector_id, 120),
       optional(data.secret_ref, 120), integer(data.channel_count, 'Canais', 1, 32), bool(data.active)];
-    if (values[7] && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(values[7])) throw Error('Referência de segredo: use nome de variável de ambiente.');
+    if (values[8] && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(values[8])) throw Error('Referência de segredo: use nome de variável de ambiente.');
     result = match[2]
-      ? await pool.query('UPDATE cop_dvrs SET unit_id=$1,name=$2,model=$3,host=$4,http_port=$5,access_mode=$6,connector_id=$7,secret_ref=$8,channel_count=$9,active=$10,updated_at=now() WHERE id=$11 RETURNING *', [...values, id(match[2])])
-      : await pool.query('INSERT INTO cop_dvrs(unit_id,name,model,host,http_port,access_mode,connector_id,secret_ref,channel_count,active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *', values);
+      ? await pool.query('UPDATE cop_dvrs SET unit_id=$1,name=$2,model=$3,cloud_serial=$4,host=$5,http_port=$6,access_mode=$7,connector_id=$8,secret_ref=$9,channel_count=$10,active=$11,updated_at=now() WHERE id=$12 RETURNING *', [...values, id(match[2])])
+      : await pool.query('INSERT INTO cop_dvrs(unit_id,name,model,cloud_serial,host,http_port,access_mode,connector_id,secret_ref,channel_count,active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *', values);
   } else {
     const dvrId = id(data.dvr_id); const dvr = await pool.query('SELECT channel_count FROM cop_dvrs WHERE id=$1', [dvrId]);
     if (!dvr.rowCount) throw Object.assign(Error('DVR não encontrado.'), { status: 404 });

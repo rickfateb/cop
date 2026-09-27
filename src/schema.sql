@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS cop_dvrs (
   unit_id BIGINT NOT NULL REFERENCES cop_units(id),
   name TEXT NOT NULL,
   model TEXT NOT NULL,
+  cloud_serial TEXT,
   host TEXT,
   http_port INTEGER NOT NULL DEFAULT 80 CHECK (http_port BETWEEN 1 AND 65535),
   access_mode TEXT NOT NULL DEFAULT 'agent' CHECK (access_mode IN ('agent', 'vpn')),
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS cop_dvrs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS cloud_serial TEXT;
 CREATE TABLE IF NOT EXISTS cop_cameras (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   dvr_id BIGINT NOT NULL REFERENCES cop_dvrs(id),
