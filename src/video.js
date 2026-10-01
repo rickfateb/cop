@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 
 const supported = new Set(['.dav', '.mp4', '.mov', '.avi', '.h264', '.264']);
 const SOI = Buffer.from([0xff, 0xd8]);
@@ -100,4 +102,36 @@ export function extractAiFrames(file, { intervalSeconds = 3, maxFrames = 600, wi
       finish(Error(`FFmpeg não extraiu frames de ${path.basename(file)}${detail ? ': ' + detail : ''}`));
     });
   });
+}
+
+
+export async function transcodeReviewVideo(payload, filename = 'clip.dav', { timeoutMs = 180000, maxBytes = 24 * 1024 * 1024 } = {}) {
+  const dir = await mkdtemp(path.join(tmpdir(), 'cop-review-'));
+  const safeExt = path.extname(filename).toLowerCase().replace(/[^.a-z0-9]/g, '') || '.dav';
+  const input = path.join(dir, 'input' + safeExt);
+  const output = path.join(dir, 'review.mp4');
+  try {
+    await writeFile(input, payload);
+    await new Promise((resolve, reject) => {
+      const child = spawn('ffmpeg', [
+        '-hide_banner','-loglevel','error','-y','-i',input,
+        '-map','0:v:0','-an','-c:v','libx264','-preset','veryfast','-crf','28',
+        '-pix_fmt','yuv420p','-movflags','+faststart',output
+      ], { stdio:['ignore','ignore','pipe'] });
+      const errors=[]; let done=false;
+      const finish=(error)=>{ if(done)return; done=true; clearTimeout(timer); error?reject(error):resolve(); };
+      const timer=setTimeout(()=>{ child.kill('SIGKILL'); finish(Error('Timeout convertendo vídeo para MP4.')); },timeoutMs);
+      child.stderr.on('data',chunk=>{ if(errors.reduce((n,b)=>n+b.length,0)<65536) errors.push(chunk); });
+      child.on('error',finish);
+      child.on('close',code=>{
+        if(code===0)return finish();
+        finish(Error('FFmpeg não converteu vídeo: '+Buffer.concat(errors).toString('utf8').trim().slice(-500)));
+      });
+    });
+    const data=await readFile(output);
+    if(!data.length||data.length>maxBytes) throw Error('Vídeo MP4 excede limite operacional.');
+    return data;
+  } finally {
+    await rm(dir,{recursive:true,force:true}).catch(()=>{});
+  }
 }
