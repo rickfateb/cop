@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { contentTypeFor, detectChannel } from '../src/ingest.js';
-import { isExtractableVideo } from '../src/video.js';
+import { isExtractableVideo, samplingConfig } from '../src/video.js';
 
 test('detects explicit camera/channel tokens without guessing bare numbers', () => {
   assert.equal(detectChannel('abc/channel01/2026-09-30/foto.jpg'), 1);
@@ -22,4 +22,13 @@ test('identifies video files eligible for AI frame extraction', () => {
   assert.equal(isExtractableVideo('clip.dav'), true);
   assert.equal(isExtractableVideo('clip.MP4'), true);
   assert.equal(isExtractableVideo('foto.jpg'), false);
+});
+
+
+test('uses 3-second default sampling for motion video', () => {
+  assert.deepEqual(samplingConfig({}), { intervalSeconds: 3, maxFrames: 600, width: 640 });
+  assert.deepEqual(
+    samplingConfig({ frame_interval_seconds: 4, max_ai_frames_per_video: 300, ai_frame_width: 800 }),
+    { intervalSeconds: 4, maxFrames: 300, width: 800 }
+  );
 });
