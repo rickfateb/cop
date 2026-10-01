@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { contentTypeFor, detectChannel } from '../src/ingest.js';
 import { isExtractableVideo, samplingConfig } from '../src/video.js';
+import { buildPlaybackUrl } from '../src/playback.js';
 
 test('detects explicit camera/channel tokens without guessing bare numbers', () => {
   assert.equal(detectChannel('abc/channel01/2026-09-30/foto.jpg'), 1);
@@ -31,4 +32,10 @@ test('uses 3-second default sampling for motion video', () => {
     samplingConfig({ frame_interval_seconds: 4, max_ai_frames_per_video: 300, ai_frame_width: 800 }),
     { intervalSeconds: 4, maxFrames: 300, width: 800 }
   );
+});
+
+
+test('builds Intelbras historical playback URL', () => {
+  const url=buildPlaybackUrl({host:'192.168.1.108',port:554,channel:2,start:'2026-09-29T22:23:00.000Z',end:'2026-09-29T22:38:00.000Z'});
+  assert.match(url,/^rtsp:\/\/192\.168\.1\.108:554\/cam\/playback\?channel=2&starttime=2026_09_29_19_23_00&endtime=2026_09_29_19_38_00$/);
 });
