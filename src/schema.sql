@@ -29,6 +29,8 @@ ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS cloud_serial TEXT;
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS ingest_key TEXT;
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS rtsp_port INTEGER NOT NULL DEFAULT 554;
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS service_port INTEGER NOT NULL DEFAULT 37777;
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS remote_connection_mode TEXT;
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS access_username TEXT;
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS last_ingest_at TIMESTAMPTZ;
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS last_ingest_path TEXT;
 ALTER TABLE cop_dvrs DROP CONSTRAINT IF EXISTS cop_dvrs_access_mode_check;
@@ -38,6 +40,9 @@ ALTER TABLE cop_dvrs DROP CONSTRAINT IF EXISTS cop_dvrs_rtsp_port_check;
 ALTER TABLE cop_dvrs ADD CONSTRAINT cop_dvrs_rtsp_port_check CHECK (rtsp_port BETWEEN 1 AND 65535);
 ALTER TABLE cop_dvrs DROP CONSTRAINT IF EXISTS cop_dvrs_service_port_check;
 ALTER TABLE cop_dvrs ADD CONSTRAINT cop_dvrs_service_port_check CHECK (service_port BETWEEN 1 AND 65535);
+ALTER TABLE cop_dvrs DROP CONSTRAINT IF EXISTS cop_dvrs_remote_connection_mode_check;
+ALTER TABLE cop_dvrs ADD CONSTRAINT cop_dvrs_remote_connection_mode_check
+  CHECK (remote_connection_mode IS NULL OR remote_connection_mode IN ('cloud','domain','ip','ip_extra'));
 
 UPDATE cop_dvrs
 SET ingest_key = lower(substr(md5(random()::text || clock_timestamp()::text || id::text), 1, 12))
