@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-const state = { token: '', data: null, unitId: null, edit: null, objectUrls: [] };
+const state = { token: '', data: null, unitId: null, edit: null, objectUrls: [], view: 'config', summaries: null };
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]);
 const toast = (message, error = false) => { const el = $('#toast'); el.textContent = message; el.className = `show${error ? ' error' : ''}`; clearTimeout(toast.timer); toast.timer = setTimeout(() => el.className = '', 4000); };
 const accessLabel = mode => ({ sftp_push:'SFTP · DVR envia', ftp_push:'FTP · gateway', direct_http:'HTTP/RTSP direto', intelbras_cloud:'Intelbras Cloud · homologação', agent:'Agente legado', vpn:'VPN legada' }[mode] || mode);
@@ -26,6 +26,53 @@ async function api(path, method = 'GET', data) {
   if (!response.ok) throw Error(result.error || `Erro ${response.status}`);
   return result;
 }
+function setView(view) {
+  state.view = view;
+  const config = view === 'config';
+  $('#stats').hidden = !config;
+  $('#ingest-status').hidden = !config;
+  document.querySelector('.layout').hidden = !config;
+  $('#summaries-view').hidden = config;
+  $('#add-unit').hidden = !config;
+  $('#show-config').classList.toggle('active', config);
+  $('#show-summaries').classList.toggle('active', !config);
+}
+async function loadSummaries() {
+  state.summaries = await api('fraud/summaries?limit=100');
+  renderSummaries();
+}
+function renderSummaries() {
+  const rows = state.summaries?.incidents || [];
+  const byUnit = new Map();
+  for (const row of rows) {
+    const key = row.unit_name || 'Unidade';
+    if (!byUnit.has(key)) byUnit.set(key, []);
+    byUnit.get(key).push(row);
+  }
+  $('#summaries-view').innerHTML = `<div class="section-head"><div><div class="eyebrow">RESUMOS</div><h2>Ocorrências para conferência humana</h2><p>Eventos classificados automaticamente como Grave - Fraude.</p></div><button class="ghost" id="refresh-summaries">Atualizar</button></div>${rows.length ? [...byUnit.entries()].map(([unit,items]) => `
+    <section class="summary-unit"><h3>${escapeHtml(unit)}</h3>${items.map(item => `
+      <article class="summary-card">
+        <div class="summary-head"><div><strong>${new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(item.occurred_at))} · Grave - Fraude</strong><small>${dateTime(item.occurred_at)} · ${escapeHtml(item.camera_name || item.dvr_name || '')}</small></div><span class="fraud-badge">Grave - Fraude</span></div>
+        <p class="summary-text">${escapeHtml(item.summary)}</p>
+        <p><b>Motivo da preocupação:</b> ${escapeHtml(item.rationale)}</p>
+        <div class="evidence-grid">${(item.evidence||[]).map(ev => `<figure><img data-summary-media="${ev.media_id}" alt="Evidência ${ev.evidence_order}"><figcaption>Quadro ${ev.evidence_order}${ev.frame_offset_seconds != null ? ' · +'+ev.frame_offset_seconds+'s' : ''}</figcaption></figure>`).join('')}</div>
+        ${item.video_media_id ? `<div class="review-video"><video controls preload="metadata" data-summary-video="${item.video_media_id}"></video></div>` : ''}
+        <div class="summary-meta"><span>Confiança IA: ${Math.round(Number(item.confidence||0)*100)}%</span><span>WhatsApp 9h: ${escapeHtml(item.alert_status)}</span></div>
+      </article>`).join('')}</section>`).join('') : '<div class="empty"><strong>Nenhuma ocorrência Grave - Fraude.</strong>Os eventos classificados pela IA aparecerão aqui para revisão.</div>'}`;
+  $('#refresh-summaries')?.addEventListener('click',()=>loadSummaries().then(()=>toast('Resumos atualizados.')).catch(e=>toast(e.message,true)));
+  loadSummaryMedia();
+}
+async function loadSummaryMedia() {
+  for (const el of document.querySelectorAll('[data-summary-media],[data-summary-video]')) {
+    const id = el.dataset.summaryMedia || el.dataset.summaryVideo;
+    try {
+      const response = await fetch(`/api/media/${id}`, { headers: { Authorization: `Bearer ${state.token}` } });
+      if (!response.ok) continue;
+      const url = URL.createObjectURL(await response.blob()); state.objectUrls.push(url); el.src = url;
+    } catch {}
+  }
+}
+
 function normalizeIds() {
   for (const key of ['units','dvrs','cameras','recent_media']) (state.data[key] || []).forEach(row => {
     for (const idKey of ['id','unit_id','dvr_id','camera_id','event_id']) if (row[idKey] != null) row[idKey] = Number(row[idKey]);
@@ -36,6 +83,7 @@ async function refresh() {
   normalizeIds();
   if (!state.data.units.some(u => u.id === state.unitId)) state.unitId = state.data.units[0]?.id ?? null;
   render();
+  if (state.view === 'summaries') await loadSummaries();
 }
 function render() {
   const { units, dvrs, cameras, recent_media: recent = [] } = state.data;
@@ -62,6 +110,7 @@ function render() {
     return `<article class="dvr panel"><div class="section-head"><div class="dvr-title"><span class="device-icon">▣</span><div><h3>${escapeHtml(d.name)} <span class="badge ${d.active ? '' : 'off'}">${d.active ? 'Ativo' : 'Inativo'}</span></h3><p>${escapeHtml(d.model)} · ${d.channel_count} canais · ${escapeHtml(accessLabel(d.access_mode))}${d.remote_connection_mode ? ' · acesso remoto ' + escapeHtml(d.remote_connection_mode === 'cloud' ? 'Cloud' : d.remote_connection_mode) : ''}${d.cloud_serial ? ' · Serial ' + escapeHtml(d.cloud_serial) : ''}</p></div></div><div class="tools"><button class="ghost" data-edit="dvr:${d.id}">Configurar</button><button class="ghost" data-add="camera:${d.id}">+ Câmera</button></div></div><div class="dvr-ingest"><span>Local SFTP <code>${escapeHtml(d.ingest_key || '—')}</code></span><span>Último arquivo <b>${dateTime(d.last_ingest_at)}</b></span></div><div class="camera-grid">${cams.map(c => `<div class="camera" role="button" tabindex="0" data-edit="camera:${c.id}"><span class="lens">◉</span><div><b>${escapeHtml(c.name)}</b><small>Canal ${c.channel} · ${escapeHtml(c.area || 'Área não definida')}</small><em class="${c.active && c.policy.enabled ? '' : 'muted'}">${c.active && c.policy.enabled ? `${c.policy.offsets.length} marco(s) · ${c.policy.analysis_mode === 'manual' ? 'IA manual' : c.policy.analysis_mode === 'off' ? 'sem IA' : 'IA agendada'}` : 'Captura desligada'}${c.device_config_status ? ` · DVR ${c.device_config_status === 'confirmed' ? 'confirmado' : c.device_config_status === 'pending' ? 'pendente' : c.device_config_status}` : ''}</em></div></div>`).join('')}</div>${cams.length ? '' : '<div class="empty">Nenhuma câmera cadastrada neste DVR.</div>'}</article>`;
   }).join('') : '<div class="panel empty"><strong>Sem DVR nesta unidade</strong>Adicione o gravador para configurar os canais.</div>';
   renderRecent(recent.filter(m => m.unit_id === unit.id));
+  setView(state.view);
 }
 function renderRecent(items) {
   state.objectUrls.forEach(URL.revokeObjectURL); state.objectUrls = [];
@@ -113,6 +162,8 @@ function payload(form, type) {
 }
 $('#login-form').addEventListener('submit', async e => { e.preventDefault(); state.token = $('#token').value; try { await refresh(); $('#login').hidden = true; $('#workspace').hidden = false; $('#logout').hidden = false; $('#token').value = ''; } catch (error) { state.token = ''; toast(error.message, true); } });
 $('#logout').addEventListener('click', () => { state.objectUrls.forEach(URL.revokeObjectURL); state.objectUrls=[]; state.token = ''; state.data = null; $('#workspace').hidden = true; $('#login').hidden = false; $('#logout').hidden = true; });
+$('#show-config').addEventListener('click', () => { setView('config'); });
+$('#show-summaries').addEventListener('click', () => { setView('summaries'); loadSummaries().catch(error => toast(error.message,true)); });
 $('#add-unit').addEventListener('click', () => edit('unit'));
 $('#refresh').addEventListener('click', () => refresh().then(() => toast('Dados atualizados.')).catch(error => toast(error.message,true)));
 $('#workspace').addEventListener('click', e => {
