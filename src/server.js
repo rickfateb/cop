@@ -18,6 +18,37 @@ const pool = new pg.Pool({
   ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: true } : undefined
 });
 await pool.query(await readFile(path.join(root, 'src/schema.sql'), 'utf8'));
+
+async function applyDvrPatchFromEnv() {
+  const raw = process.env.COP_DVR_PATCH_JSON;
+  if (!raw) return;
+  let patch;
+  try { patch = JSON.parse(raw); }
+  catch { throw Error('COP_DVR_PATCH_JSON inválido.'); }
+  const serial = nonEmpty(patch.cloud_serial, 'Serial Intelbras Cloud', 80);
+  const remoteMode = patch.remote_connection_mode == null ? null : nonEmpty(patch.remote_connection_mode, 'Método remoto', 20);
+  if (remoteMode && !['cloud','domain','ip','ip_extra'].includes(remoteMode)) throw Error('Método remoto inválido no patch.');
+  const accessMode = patch.access_mode == null ? null : nonEmpty(patch.access_mode, 'Integração principal', 30);
+  if (accessMode && !accessModes.includes(accessMode)) throw Error('Integração principal inválida no patch.');
+  const servicePort = patch.service_port == null ? null : integer(Number(patch.service_port), 'Porta de serviço', 1, 65535);
+  const result = await pool.query(`
+    UPDATE cop_dvrs SET
+      name=COALESCE($2,name),
+      service_port=COALESCE($3,service_port),
+      remote_connection_mode=COALESCE($4,remote_connection_mode),
+      access_username=COALESCE($5,access_username),
+      secret_ref=COALESCE($6,secret_ref),
+      access_mode=COALESCE($7,access_mode),
+      updated_at=now()
+    WHERE cloud_serial=$1
+    RETURNING id,name,model,cloud_serial,channel_count,access_mode,remote_connection_mode,access_username,service_port,secret_ref,ingest_key
+  `, [serial, optional(patch.name, 120), servicePort, remoteMode, optional(patch.access_username, 120),
+      optional(patch.secret_ref, 120), accessMode]);
+  if (!result.rowCount) throw Error(`DVR do patch não encontrado: ${serial}`);
+  const row = result.rows[0];
+  console.log(`COP DVR patch aplicado: id=${row.id} nome=${row.name} serial=${row.cloud_serial} modelo=${row.model} canais=${row.channel_count} ingest=${row.access_mode} remoto=${row.remote_connection_mode} usuario=${row.access_username} porta=${row.service_port} segredo=${row.secret_ref} local=${row.ingest_key}`);
+}
+await applyDvrPatchFromEnv();
 const ingestWorker = startIngestWorker({ pool });
 
 const json = (res, status, data) => {
