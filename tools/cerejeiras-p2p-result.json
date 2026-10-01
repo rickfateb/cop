@@ -1,0 +1,22 @@
+{
+  "tested_at": "2026-10-01T18:31:10Z",
+  "unit": "Cerejeiras",
+  "model": "MHDX 1104",
+  "dvr_id": 1,
+  "active_channels": [
+    2
+  ],
+  "runtime": "isolated Railway one-shot",
+  "client": "OpenDahua 1.0.8",
+  "signaling_cloud": "Dahua Easy4IP",
+  "database_read_only": true,
+  "credential_reference_verified": true,
+  "result": "NOT_FOUND",
+  "stage": "cloud_connect",
+  "recording_search_executed": false,
+  "download_executed": false,
+  "production_connector_enabled": false,
+  "interpretation": "The default Dahua P2P discovery did not find this Intelbras serial. This does not establish the status of Intelbras Cloud or official Intelbras client playback.",
+  "next_required_validation": "Official Intelbras Cloud playback/export on the same DVR channel 2; or a supported Intelbras Cloud SDK with serial authentication. OpenDahua is not homologated for this DVR.",
+  "deployment_id": "8f5f2324-de3d-43bb-a5fc-42ddd596b42e"
+}
