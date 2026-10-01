@@ -208,3 +208,11 @@ CREATE TABLE IF NOT EXISTS cop_investigation_channels (
 CREATE INDEX IF NOT EXISTS cop_investigations_unit_time_idx ON cop_investigations(unit_id,reference_at DESC);
 CREATE INDEX IF NOT EXISTS cop_investigations_status_idx ON cop_investigations(status,created_at);
 CREATE INDEX IF NOT EXISTS cop_investigation_channels_status_idx ON cop_investigation_channels(status,investigation_id);
+
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_mode TEXT NOT NULL DEFAULT 'unavailable';
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_host TEXT;
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_rtsp_port INTEGER;
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_username TEXT;
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_password_ref TEXT;
+ALTER TABLE cop_dvrs DROP CONSTRAINT IF EXISTS cop_dvrs_playback_mode_check;
+ALTER TABLE cop_dvrs ADD CONSTRAINT cop_dvrs_playback_mode_check CHECK(playback_mode IN ('unavailable','rtsp_direct','agent','cloud'));
