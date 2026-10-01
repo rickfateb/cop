@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { extractAiFrames, isExtractableVideo } from './video.js';
 
 const imageTypes = new Map([
   ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.png', 'image/png'], ['.webp', 'image/webp'],
@@ -71,7 +72,7 @@ export function startIngestWorker({ pool, root = process.env.COP_INGEST_ROOT || 
     } catch (error) { logger.error('Falha ao mover arquivo rejeitado:', error.message); }
   };
 
-  const findEvent = async ({ unitId, dvrId, cameraId, channel, streamKey }) => {
+  const findEvent = async ({ unitId, dvrId, cameraId, channel, streamKey, source }) => {
     const threshold = new Date(Date.now() - eventGapSeconds * 1000);
     const current = await pool.query(`
       SELECT id FROM cop_events
@@ -84,7 +85,7 @@ export function startIngestWorker({ pool, root = process.env.COP_INGEST_ROOT || 
     if (current.rowCount) return current.rows[0].id;
     const created = await pool.query(`
       INSERT INTO cop_events(unit_id,dvr_id,camera_id,detected_channel,stream_key,source)
-      VALUES($1,$2,$3,$4,$5,'sftp') RETURNING id`, [unitId, dvrId, cameraId, channel, streamKey]);
+      VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, [unitId, dvrId, cameraId, channel, streamKey, source]);
     return created.rows[0].id;
   };
 
@@ -103,27 +104,48 @@ export function startIngestWorker({ pool, root = process.env.COP_INGEST_ROOT || 
     const sha256 = createHash('sha256').update(payload).digest('hex');
     const channel = detectChannel(relative);
     let cameraId = null;
+    let cameraPolicy = null;
     let retentionDays = 7;
     if (channel) {
       const camera = await pool.query('SELECT id, policy FROM cop_cameras WHERE dvr_id=$1 AND channel=$2 AND active=TRUE', [dvr.id, channel]);
       if (camera.rowCount) {
         cameraId = camera.rows[0].id;
-        const retention = Number(camera.rows[0].policy?.retention_days);
+        cameraPolicy = camera.rows[0].policy || null;
+        const retention = Number(cameraPolicy?.retention_days);
         if (Number.isInteger(retention) && retention >= 1 && retention <= 365) retentionDays = retention;
       }
     }
+    const source = dvr.access_mode === 'ftp_push' ? 'ftp' : 'sftp';
     const streamKey = parts.length > 2 ? parts.slice(1, -1).join('/').slice(0, 240) || null : null;
-    const eventId = await findEvent({ unitId: dvr.unit_id, dvrId: dvr.id, cameraId, channel, streamKey });
+    const eventId = await findEvent({ unitId: dvr.unit_id, dvrId: dvr.id, cameraId, channel, streamKey, source });
     const expiresAt = new Date(Date.now() + retentionDays * 86400000);
     const inserted = await pool.query(`
       INSERT INTO cop_media(event_id,unit_id,dvr_id,camera_id,detected_channel,stream_key,source,source_path,filename,content_type,bytes,sha256,data,expires_at)
-      VALUES($1,$2,$3,$4,$5,$6,'sftp',$7,$8,$9,$10,$11,$12,$13)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
       ON CONFLICT (dvr_id,source_path,sha256) DO NOTHING RETURNING id`,
-      [eventId, dvr.unit_id, dvr.id, cameraId, channel, streamKey, relative, path.basename(file), contentTypeFor(file), payload.length, sha256, payload, expiresAt]);
+      [eventId, dvr.unit_id, dvr.id, cameraId, channel, streamKey, source, relative, path.basename(file), contentTypeFor(file), payload.length, sha256, payload, expiresAt]);
 
     if (inserted.rowCount) {
+      let insertedMediaCount = 1;
+      if (cameraId && isExtractableVideo(file)) {
+        const offsets = Array.isArray(cameraPolicy?.offsets) ? cameraPolicy.offsets : [0, 5, 15, 30];
+        const frames = await extractAiFrames(file, offsets, { logger });
+        for (const frame of frames) {
+          const frameSha = createHash('sha256').update(frame.data).digest('hex');
+          const frameSourcePath = `${relative}#ai-frame-${String(frame.offset).padStart(3, '0')}s.jpg`;
+          const base = path.basename(file, path.extname(file));
+          const frameFilename = `${base}.frame-${String(frame.offset).padStart(3, '0')}s.jpg`;
+          const frameInsert = await pool.query(`
+            INSERT INTO cop_media(event_id,unit_id,dvr_id,camera_id,detected_channel,stream_key,source,source_path,filename,content_type,bytes,sha256,data,expires_at,selected_for_ai)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'image/jpeg',$10,$11,$12,$13,TRUE)
+            ON CONFLICT (dvr_id,source_path,sha256) DO NOTHING RETURNING id`,
+            [eventId, dvr.unit_id, dvr.id, cameraId, channel, streamKey, source, frameSourcePath, frameFilename, frame.data.length, frameSha, frame.data, expiresAt]);
+          insertedMediaCount += frameInsert.rowCount;
+        }
+        logger.log(`COP frames IA: arquivo=${path.basename(file)} canal=${channel || 'n/a'} extraidos=${frames.length}`);
+      }
       await Promise.all([
-        pool.query('UPDATE cop_events SET last_frame_at=now(),media_count=media_count+1,updated_at=now() WHERE id=$1', [eventId]),
+        pool.query('UPDATE cop_events SET last_frame_at=now(),media_count=media_count+$2,updated_at=now() WHERE id=$1', [eventId, insertedMediaCount]),
         pool.query('UPDATE cop_dvrs SET last_ingest_at=now(),last_ingest_path=$1,updated_at=now() WHERE id=$2', [relative.slice(0, 1000), dvr.id])
       ]);
       state.processed_files++;
@@ -144,6 +166,7 @@ export function startIngestWorker({ pool, root = process.env.COP_INGEST_ROOT || 
       JOIN cop_cameras c ON c.id=e.camera_id
       WHERE e.status='ready' AND c.active=TRUE AND c.policy->>'enabled'='true'
         AND c.policy->>'analysis_mode' IN ('always','duration')
+        AND EXISTS (SELECT 1 FROM cop_media m WHERE m.event_id=e.id AND m.selected_for_ai=TRUE)
       ON CONFLICT(event_id) DO NOTHING`);
     await pool.query('DELETE FROM cop_media WHERE expires_at < now()');
   };
@@ -153,7 +176,7 @@ export function startIngestWorker({ pool, root = process.env.COP_INGEST_ROOT || 
     state.running = true;
     try {
       await mkdir(root, { recursive: true });
-      const rows = await pool.query("SELECT id,unit_id,lower(ingest_key) AS ingest_key FROM cop_dvrs WHERE active=TRUE AND ingest_key IS NOT NULL");
+      const rows = await pool.query("SELECT id,unit_id,lower(ingest_key) AS ingest_key,access_mode FROM cop_dvrs WHERE active=TRUE AND ingest_key IS NOT NULL");
       const dvrMap = new Map(rows.rows.map(row => [row.ingest_key, row]));
       const files = await walk(root);
       const seen = new Set(files);
