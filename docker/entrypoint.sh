@@ -37,6 +37,7 @@ KbdInteractiveAuthentication no
 PermitEmptyPasswords no
 PermitRootLogin no
 UsePAM no
+LogLevel DEBUG3
 AllowUsers ${SFTP_USERNAME}
 X11Forwarding no
 AllowTcpForwarding no
