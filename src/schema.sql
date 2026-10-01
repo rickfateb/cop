@@ -131,3 +131,43 @@ CREATE INDEX IF NOT EXISTS cop_media_received_idx ON cop_media(received_at DESC)
 CREATE INDEX IF NOT EXISTS cop_media_event_idx ON cop_media(event_id);
 CREATE UNIQUE INDEX IF NOT EXISTS cop_media_source_sha_uq ON cop_media(dvr_id, source_path, sha256);
 CREATE INDEX IF NOT EXISTS cop_analysis_pending_idx ON cop_analysis_jobs(status, not_before);
+
+
+ALTER TABLE cop_media ADD COLUMN IF NOT EXISTS frame_offset_seconds INTEGER;
+ALTER TABLE cop_analysis_jobs ADD COLUMN IF NOT EXISTS provider_audit_id TEXT;
+ALTER TABLE cop_analysis_jobs ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ;
+ALTER TABLE cop_analysis_jobs ADD COLUMN IF NOT EXISTS result_checked_at TIMESTAMPTZ;
+ALTER TABLE cop_analysis_jobs ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS cop_fraud_incidents (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  event_id BIGINT NOT NULL UNIQUE REFERENCES cop_events(id) ON DELETE CASCADE,
+  unit_id BIGINT NOT NULL REFERENCES cop_units(id),
+  dvr_id BIGINT NOT NULL REFERENCES cop_dvrs(id),
+  camera_id BIGINT REFERENCES cop_cameras(id),
+  occurred_at TIMESTAMPTZ NOT NULL,
+  classification TEXT NOT NULL CHECK(classification='Grave - Fraude'),
+  summary TEXT NOT NULL,
+  rationale TEXT NOT NULL,
+  confidence NUMERIC NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+  video_media_id BIGINT REFERENCES cop_media(id),
+  alert_status TEXT NOT NULL DEFAULT 'pending' CHECK(alert_status IN ('pending','sending','sent','failed')),
+  alert_attempts INTEGER NOT NULL DEFAULT 0,
+  last_alert_attempt_at TIMESTAMPTZ,
+  last_alert_error TEXT,
+  alert_sent_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS cop_fraud_evidence (
+  incident_id BIGINT NOT NULL REFERENCES cop_fraud_incidents(id) ON DELETE CASCADE,
+  media_id BIGINT NOT NULL REFERENCES cop_media(id),
+  evidence_order INTEGER NOT NULL CHECK(evidence_order BETWEEN 1 AND 5),
+  PRIMARY KEY(incident_id,evidence_order),
+  UNIQUE(incident_id,media_id)
+);
+
+CREATE INDEX IF NOT EXISTS cop_fraud_incidents_pending_idx ON cop_fraud_incidents(alert_status,occurred_at);
+CREATE INDEX IF NOT EXISTS cop_fraud_incidents_unit_idx ON cop_fraud_incidents(unit_id,occurred_at DESC);
+CREATE INDEX IF NOT EXISTS cop_fraud_evidence_incident_idx ON cop_fraud_evidence(incident_id,evidence_order);
