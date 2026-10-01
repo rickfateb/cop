@@ -4,6 +4,22 @@ const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':
 const toast = (message, error = false) => { const el = $('#toast'); el.textContent = message; el.className = `show${error ? ' error' : ''}`; clearTimeout(toast.timer); toast.timer = setTimeout(() => el.className = '', 4000); };
 const accessLabel = mode => ({ sftp_push:'SFTP · DVR envia', ftp_push:'FTP · gateway', direct_http:'HTTP/RTSP direto', intelbras_cloud:'Intelbras Cloud · homologação', agent:'Agente legado', vpn:'VPN legada' }[mode] || mode);
 const dateTime = value => value ? new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'short'}).format(new Date(value)) : 'nunca';
+function ensureShell() {
+  const intro = document.querySelector('.intro');
+  if (intro && !document.querySelector('#refresh')) {
+    const button = document.createElement('button'); button.id='refresh'; button.className='ghost'; button.textContent='Atualizar';
+    intro.appendChild(button);
+  }
+  const stats = document.querySelector('#stats');
+  if (stats && !document.querySelector('#ingest-status')) {
+    const section=document.createElement('section'); section.id='ingest-status'; section.className='panel ingest-status'; stats.after(section);
+  }
+  const content=document.querySelector('.content');
+  if (content && !document.querySelector('#recent-media')) {
+    const section=document.createElement('section'); section.id='recent-media'; section.className='panel recent-media'; content.appendChild(section);
+  }
+}
+ensureShell();
 async function api(path, method = 'GET', data) {
   const response = await fetch(`/api/${path}`, { method, headers: { Authorization: `Bearer ${state.token}`, ...(data ? { 'Content-Type': 'application/json' } : {}) }, body: data ? JSON.stringify(data) : undefined });
   const result = await response.json();
