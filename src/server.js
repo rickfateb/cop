@@ -7,6 +7,7 @@ import pg from 'pg';
 import { startIngestWorker } from './ingest.js';
 import { createGatewayIngest } from './gateway.js';
 import { startFraudAutomation, verifySignedMedia } from './fraud.js';
+import { createInvestigation, listInvestigations, investigationDetail } from './investigations.js';
 import { accessModes, defaults, integer, models, nonEmpty, optional, validatePolicy } from './validation.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -182,6 +183,22 @@ async function events(res, url) {
   json(res, 200, { events: result.rows });
 }
 
+async function investigationsApi(req,res,url) {
+  if(req.method==='GET'){
+    const rows=await listInvestigations(pool,{limit:url.searchParams.get('limit'),unitId:url.searchParams.get('unit_id')});
+    return json(res,200,{investigations:rows,connector:{status:'not_available',note:'Estrutura pronta. A recuperação histórica do DVR será ativada quando o conector remoto Intelbras for homologado.'}});
+  }
+  if(req.method==='POST'){
+    const body=await readJson(req);
+    const created=await createInvestigation(pool,body,'admin');
+    return json(res,201,{investigation:created,connector:{status:'not_available'}});
+  }
+  return json(res,405,{error:'Método não permitido.'});
+}
+async function investigationById(res,idValue) {
+  return json(res,200,{investigation:await investigationDetail(pool,idValue)});
+}
+
 async function fraudSummaries(res, url) {
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 50));
   const unitId = url.searchParams.get('unit_id');
@@ -253,6 +270,9 @@ async function route(req, res) {
   if (url.pathname === '/api/config' && req.method === 'GET') return config(res);
   if (url.pathname === '/api/events' && req.method === 'GET') return events(res, url);
   if (url.pathname === '/api/fraud/summaries' && req.method === 'GET') return fraudSummaries(res, url);
+  if (url.pathname === '/api/investigations') return investigationsApi(req,res,url);
+  const investigationMatch=url.pathname.match(/^\/api\/investigations\/([1-9]\d*)$/);
+  if(investigationMatch&&req.method==='GET') return investigationById(res,investigationMatch[1]);
   const mediaMatch = url.pathname.match(/^\/api\/media\/([1-9]\d*)$/);
   if (mediaMatch && req.method === 'GET') return media(res, mediaMatch[1]);
 
