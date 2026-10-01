@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { startIngestWorker } from './ingest.js';
+import { createGatewayIngest } from './gateway.js';
 import { accessModes, defaults, integer, models, nonEmpty, optional, validatePolicy } from './validation.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -91,6 +92,7 @@ async function ensureDvrIngestDirectories() {
 }
 await ensureDvrIngestDirectories();
 const ingestWorker = startIngestWorker({ pool });
+const gatewayIngest = createGatewayIngest({ pool });
 
 const json = (res, status, data) => {
   res.writeHead(status, {
@@ -196,6 +198,8 @@ async function route(req, res) {
     });
     return res.end(contents);
   }
+  const externalMatch = url.pathname.match(/^\/api\/ingest\/external\/([A-Za-z0-9_-]{6,64})$/);
+  if (externalMatch && req.method === 'POST') return gatewayIngest(req, res, externalMatch[1], json);
   if (!sameToken(req.headers.authorization?.replace(/^Bearer /, ''))) return json(res, 401, { error: 'Acesso não autorizado.' });
   if (url.pathname === '/api/config' && req.method === 'GET') return config(res);
   if (url.pathname === '/api/events' && req.method === 'GET') return events(res, url);
