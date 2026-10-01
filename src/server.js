@@ -71,6 +71,25 @@ async function applyDvrPatchFromEnv() {
   console.log(`COP DVR patch aplicado: id=${row.id} nome=${row.name} serial=${row.cloud_serial} modelo=${row.model} canais=${row.channel_count} ingest=${row.access_mode} remoto=${row.remote_connection_mode} usuario=${row.access_username} porta=${row.service_port} segredo=${row.secret_ref} local=${row.ingest_key} cameras_atualizadas=${cameraCount}`);
 }
 await applyDvrPatchFromEnv();
+
+async function ensureDvrIngestDirectories() {
+  const base = process.env.COP_INGEST_ROOT || '/data/sftp/incoming';
+  const rows = await pool.query("SELECT ingest_key FROM cop_dvrs WHERE active=TRUE AND ingest_key IS NOT NULL AND ingest_key <> ''");
+  const { mkdir, chown } = await import('node:fs/promises');
+  let created = 0;
+  for (const row of rows.rows) {
+    const target = path.join(base, row.ingest_key);
+    await mkdir(target, { recursive: true, mode: 0o750 });
+    try {
+      const uid = Number(process.env.SFTP_UID || 1000);
+      const gid = Number(process.env.SFTP_GID || 1000);
+      if (Number.isInteger(uid) && Number.isInteger(gid)) await chown(target, uid, gid);
+    } catch {}
+    created++;
+  }
+  console.log(`COP SFTP diretórios preparados: ${created}`);
+}
+await ensureDvrIngestDirectories();
 const ingestWorker = startIngestWorker({ pool });
 
 const json = (res, status, data) => {
