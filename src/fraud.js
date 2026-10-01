@@ -194,9 +194,9 @@ function localTime(value) {
 async function sendNineOClock(pool, logger) {
   if (!process.env.COP_FRAUD_ALERT_URL || !process.env.COP_FRAUD_ALERT_TOKEN) return;
   const clock=(await pool.query(`SELECT to_char(now() AT TIME ZONE 'America/Sao_Paulo','YYYY-MM-DD') local_date,
-    extract(hour from now() AT TIME ZONE 'America/Sao_Paulo')::int hour,
+    extract(hour from now() AT TIME ZONE 'America/Sao_Paulo')::int AS local_hour,
     ((date_trunc('day',now() AT TIME ZONE 'America/Sao_Paulo')+interval '9 hours') AT TIME ZONE 'America/Sao_Paulo') cutoff`)).rows[0];
-  if (clock.hour !== 9) return;
+  if (clock.local_hour !== 9) return;
   const incidents=(await pool.query(`
     SELECT i.*,u.name unit_name
     FROM cop_fraud_incidents i JOIN cop_units u ON u.id=i.unit_id
