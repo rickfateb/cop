@@ -20,11 +20,11 @@ async function binaryBody(req, maxBytes) {
 }
 
 function safeRelativePath(value) {
-  const raw = String(value || '').replaceAll('\\\\', '/').replace(/^\\/+/, '');
+  const raw = String(value || '').replaceAll('\\', '/').replace(/^\/+/, '');
   const parts = raw.split('/').filter(Boolean);
   if (!parts.length || parts.some(part => part === '.' || part === '..')) throw Error('Caminho de arquivo inválido.');
   return parts.map(part => {
-    const safe = part.replace(/[^A-Za-z0-9._()\\- ]/g, '_').slice(0, 120);
+    const safe = part.replace(/[^A-Za-z0-9._() -]/g, '_').slice(0, 120);
     if (!safe || safe === '.' || safe === '..') throw Error('Nome de arquivo inválido.');
     return safe;
   }).join('/');
