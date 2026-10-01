@@ -117,6 +117,12 @@ CREATE TABLE IF NOT EXISTS cop_ingest_errors (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE cop_cameras ADD COLUMN IF NOT EXISTS device_config JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE cop_cameras ADD COLUMN IF NOT EXISTS device_config_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE cop_cameras DROP CONSTRAINT IF EXISTS cop_cameras_device_config_status_check;
+ALTER TABLE cop_cameras ADD CONSTRAINT cop_cameras_device_config_status_check
+  CHECK (device_config_status IN ('pending','confirmed','unsupported','error'));
+
 CREATE INDEX IF NOT EXISTS cop_dvrs_unit_idx ON cop_dvrs(unit_id);
 CREATE INDEX IF NOT EXISTS cop_cameras_dvr_idx ON cop_cameras(dvr_id);
 CREATE INDEX IF NOT EXISTS cop_events_dvr_time_idx ON cop_events(dvr_id, last_frame_at DESC);
