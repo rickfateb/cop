@@ -1,0 +1,23 @@
+services:
+  cop-ftp-gateway:
+    build: .
+    container_name: cop-ftp-gateway
+    restart: unless-stopped
+    ports:
+      - "21:21"
+      - "21000-21010:21000-21010"
+    environment:
+      FTP_PUBLIC_IP: ${FTP_PUBLIC_IP}
+      FTP_USER: ${FTP_USER:-cop_ftp}
+      FTP_PASSWORD: ${FTP_PASSWORD}
+      FTP_INGEST_KEYS: ${FTP_INGEST_KEYS:-d71e617fa7a5}
+      FTP_PASV_MIN_PORT: ${FTP_PASV_MIN_PORT:-21000}
+      FTP_PASV_MAX_PORT: ${FTP_PASV_MAX_PORT:-21010}
+      COP_BASE_URL: ${COP_BASE_URL:-https://cop-web-ingest-production.up.railway.app}
+      COP_GATEWAY_TOKEN: ${COP_GATEWAY_TOKEN}
+      FTP_SCAN_MS: ${FTP_SCAN_MS:-3000}
+    volumes:
+      - ftp-data:/srv/ftp
+
+volumes:
+  ftp-data:
