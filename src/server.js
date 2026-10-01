@@ -147,17 +147,21 @@ async function route(req, res) {
     if (!accessModes.includes(accessMode)) throw Error('Modo de acesso inválido.');
     const cloudSerial = optional(data.cloud_serial, 80);
     if (cloudSerial && !/^[A-Za-z0-9_-]+$/.test(cloudSerial)) throw Error('Serial Intelbras Cloud inválido.');
+    const remoteConnectionMode = optional(data.remote_connection_mode, 20);
+    if (remoteConnectionMode && !['cloud','domain','ip','ip_extra'].includes(remoteConnectionMode)) throw Error('Método de conexão remota inválido.');
+    const accessUsername = optional(data.access_username, 120);
     const values = [unitId, nonEmpty(data.name, 'DVR'), model, cloudSerial, optional(data.host, 255),
       integer(data.http_port, 'Porta HTTP', 1, 65535), integer(data.rtsp_port, 'Porta RTSP', 1, 65535),
-      integer(data.service_port, 'Porta de serviço', 1, 65535), accessMode, optional(data.connector_id, 120),
-      optional(data.secret_ref, 120), integer(data.channel_count, 'Canais', 1, 32), bool(data.active)];
-    if (values[10] && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(values[10])) throw Error('Referência de segredo: use nome de variável de ambiente.');
+      integer(data.service_port, 'Porta de serviço', 1, 65535), remoteConnectionMode, accessUsername,
+      accessMode, optional(data.connector_id, 120), optional(data.secret_ref, 120),
+      integer(data.channel_count, 'Canais', 1, 32), bool(data.active)];
+    if (values[12] && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(values[12])) throw Error('Referência de segredo: use nome de variável de ambiente.');
     result = match[2]
       ? await pool.query(`UPDATE cop_dvrs SET unit_id=$1,name=$2,model=$3,cloud_serial=$4,host=$5,http_port=$6,rtsp_port=$7,
-          service_port=$8,access_mode=$9,connector_id=$10,secret_ref=$11,channel_count=$12,active=$13,updated_at=now()
-          WHERE id=$14 RETURNING *`, [...values, id(match[2])])
-      : await pool.query(`INSERT INTO cop_dvrs(unit_id,name,model,cloud_serial,host,http_port,rtsp_port,service_port,access_mode,connector_id,secret_ref,channel_count,active,ingest_key)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`, [...values, newIngestKey()]);
+          service_port=$8,remote_connection_mode=$9,access_username=$10,access_mode=$11,connector_id=$12,secret_ref=$13,
+          channel_count=$14,active=$15,updated_at=now() WHERE id=$16 RETURNING *`, [...values, id(match[2])])
+      : await pool.query(`INSERT INTO cop_dvrs(unit_id,name,model,cloud_serial,host,http_port,rtsp_port,service_port,remote_connection_mode,access_username,access_mode,connector_id,secret_ref,channel_count,active,ingest_key)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`, [...values, newIngestKey()]);
   } else {
     const dvrId = id(data.dvr_id); const dvr = await pool.query('SELECT channel_count FROM cop_dvrs WHERE id=$1', [dvrId]);
     if (!dvr.rowCount) throw Object.assign(Error('DVR não encontrado.'), { status: 404 });
