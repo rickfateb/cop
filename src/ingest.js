@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { extractAiFrames, isExtractableVideo } from './video.js';
+import { extractAiFrames, isExtractableVideo, samplingConfig } from './video.js';
 
 const imageTypes = new Map([
   ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.png', 'image/png'], ['.webp', 'image/webp'],
@@ -107,10 +107,11 @@ export function startIngestWorker({ pool, root = process.env.COP_INGEST_ROOT || 
     let cameraPolicy = null;
     let retentionDays = 7;
     if (channel) {
-      const camera = await pool.query('SELECT id, policy FROM cop_cameras WHERE dvr_id=$1 AND channel=$2 AND active=TRUE', [dvr.id, channel]);
+      const camera = await pool.query('SELECT id, policy, device_config FROM cop_cameras WHERE dvr_id=$1 AND channel=$2 AND active=TRUE', [dvr.id, channel]);
       if (camera.rowCount) {
         cameraId = camera.rows[0].id;
         cameraPolicy = camera.rows[0].policy || null;
+        cameraPolicy.device_config = camera.rows[0].device_config || {};
         const retention = Number(cameraPolicy?.retention_days);
         if (Number.isInteger(retention) && retention >= 1 && retention <= 365) retentionDays = retention;
       }
@@ -128,8 +129,8 @@ export function startIngestWorker({ pool, root = process.env.COP_INGEST_ROOT || 
     if (inserted.rowCount) {
       let insertedMediaCount = 1;
       if (cameraId && isExtractableVideo(file)) {
-        const offsets = Array.isArray(cameraPolicy?.offsets) ? cameraPolicy.offsets : [0, 5, 15, 30];
-        const frames = await extractAiFrames(file, offsets, { logger });
+        const sample = samplingConfig(cameraPolicy?.device_config || {});
+        const frames = await extractAiFrames(file, { ...sample, logger });
         for (const frame of frames) {
           const frameSha = createHash('sha256').update(frame.data).digest('hex');
           const frameSourcePath = `${relative}#ai-frame-${String(frame.offset).padStart(3, '0')}s.jpg`;
