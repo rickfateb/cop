@@ -1,44 +1,75 @@
 # COP · Central de Operações Cobile
 
-Portal inicial para configurar **unidades → DVRs Intelbras → câmeras → política de captura**. Cada câmera pode ser ativada separadamente, receber offsets de fotos após o início de movimento, intervalo mínimo entre eventos, duração mínima do movimento, política de encaminhamento para IA e retenção desejada.
+Portal e receptor central para **unidades → DVRs Intelbras → câmeras → eventos por movimento**. A primeira integração operacional foi desenhada para os MHDX atuais sem agente local: o próprio DVR abre uma conexão de saída e envia as fotos para o COP por **SFTP**.
 
-O cadastro do DVR inclui o **serial Intelbras Cloud** como identificação do equipamento. Esse campo não estabelece conexão via Cloud; o coletor de imagens ainda depende de acesso ao DVR pela rede privada da unidade.
+## Arquitetura operacional v0.2
 
-## Estado atual
+```text
+Câmeras -> DVR Intelbras -> Foto por DM -> SFTP/TCP Proxy Railway
+                                         -> /<ingest_key>/...
+                                         -> scanner COP
+                                         -> PostgreSQL
+                                         -> evento agrupado
+                                         -> fila de análise por IA
+```
 
-O portal cadastra e persiste configurações em PostgreSQL. **Ainda não se conecta aos DVRs, não captura fotos e não envia imagens à IA.** O amarelo na linha do tempo do aplicativo Intelbras não demonstra por si só que a interface de eventos está acessível pela rede nem que o snapshot funciona em cada firmware. Essas funções dependem de validação com um aparelho real e de um coletor com acesso à rede do DVR.
+Essa rota não exige IP público na loja, redirecionamento de porta ou computador local. O Intelbras Cloud/P2P permanece cadastrado como frente de homologação para live view, gravações e comandos remotos futuros.
 
-## Executar
+## O que já funciona no código
 
-Requer Node.js 20+ e PostgreSQL. Crie um banco separado para o COP ou use o PostgreSQL existente com as tabelas `cop_*`.
+- Cadastro de unidades, DVRs e câmeras.
+- Modelos MHDX 1104, 1108, 3108 e 3116.
+- Serial Intelbras Cloud armazenado como identificação.
+- Modos SFTP, FTP, HTTP/RTSP direto e Intelbras Cloud.
+- `ingest_key` exclusivo por DVR, usado no campo **Local** do FTP/SFTP Intelbras.
+- Servidor OpenSSH/SFTP dentro do mesmo container do COP.
+- Scanner de arquivos recebidos com espera por estabilidade do upload.
+- SHA-256 e idempotência para evitar reprocessamento.
+- Associação automática a DVR e tentativa conservadora de detectar o canal pelo caminho/nome.
+- Agrupamento temporal de fotos em eventos.
+- Mídia inicial armazenada em PostgreSQL (BYTEA) com retenção automática.
+- Fila `cop_analysis_jobs` preparada para o trabalhador de IA.
+- `/health` monitora web + scanner.
 
-1. `npm install`
-2. Configure `DATABASE_URL` e `COP_ADMIN_TOKEN` (token aleatório de pelo menos 24 caracteres) no ambiente; veja `.env.example`.
-3. `npm start`
-4. Acesse a URL do serviço e entre com `COP_ADMIN_TOKEN`.
+## Configuração do DVR Intelbras
 
-O esquema é criado na inicialização (`src/schema.sql`). Em Railway, use a raiz do repositório, `npm install` no build e `npm start` na execução; configure também as variáveis acima. O serviço atende em `PORT`, padrão 3000. `/health` é um endpoint de disponibilidade sem informações sensíveis. Execute `npm test` e `npm run check` para validar o código.
+Na interface do DVR, abra **Rede → FTP** e configure inicialmente somente fotos:
 
-O acesso administrativo usa uma única chave em memória na aba do navegador, enviada por HTTPS como Bearer. É adequado apenas para implantação inicial com poucos administradores; antes de abrir o portal para outros perfis, integrar à autenticação de Supervisor/Administrador do Cobile, com registros de auditoria. Nunca coloque a senha do DVR no cadastro: informe somente o **nome da variável de ambiente** que ficará no agente coletor. O campo `host` é endereço da rede privada e não deve apontar para uma porta de DVR exposta na internet.
+1. Habilite o serviço e selecione **SFTP**.
+2. Use o domínio e a porta externa do TCP Proxy do COP.
+3. Usuário: `cop_ingest` (ou `SFTP_USERNAME`).
+4. Senha: `COP_SFTP_PASSWORD` configurada na Railway.
+5. Campo **Local**: use o `ingest_key` exclusivo daquele DVR.
+6. No piloto, habilite o período de 24 horas.
+7. Em cada canal desejado, habilite **Foto + DM (Detecção de Movimento)**.
+8. Em **Enviar Captura**, comece com intervalo de 5 s.
+9. Não habilite vídeo no primeiro piloto.
+10. Use o botão **Teste** do próprio DVR para validar servidor e credenciais.
 
-## Políticas
+O COP preserva o caminho recebido para aprendermos a estrutura real de pastas e nomes criada por cada firmware.
 
-| Campo | Função |
-| --- | --- |
-| Capturar | Seleciona o canal para eventos de movimento. |
-| Segundos `0, 2, 5, 10` | Agenda até 10 fotos em até 300 s do início do evento. |
-| Pausa entre eventos | Reduz eventos repetidos do mesmo canal. |
-| Movimento mínimo | Ignora eventos mais curtos que o limite. |
-| IA | Desligada, manual, em todo evento válido ou após uma duração. |
-| Retenção | Prazo desejado das fotos; a exclusão efetiva será implementada junto ao armazenamento. |
+## Railway
 
-Essas políticas são **configuração para o coletor futuro** e não alteram as configurações de movimento dentro dos DVRs.
+O container escuta HTTP em `PORT` (padrão 3000) e SFTP em `SFTP_PORT` (padrão 2222). Exponha o HTTP normalmente e crie um TCP Proxy para a porta interna 2222.
 
-## Próxima integração
+Variáveis obrigatórias: `DATABASE_URL`, `COP_ADMIN_TOKEN` e `COP_SFTP_PASSWORD`.
 
-1. Instalar um pequeno agente na rede de uma unidade, ou oferecer VPN privada, e testar um canal de cada geração de DVR. Verificar autenticação, eventos `VideoMotion`, canal, duração, reconexão e JPEG de `snapshot.cgi` com firmware real.
-2. Enviar ao COP os eventos e as fotos em horários configurados; armazenar imagens em bucket privado S3 e metadados no PostgreSQL. Definir deduplicação, relógio, falhas de rede, retenção e limite de armazenamento.
-3. Adicionar fila persistente e trabalhador externo (por exemplo, Hostinger) para analisar somente eventos selecionados. Restringir o acesso às imagens com URLs de curta duração e autenticar o retorno do resultado.
-4. Exibir eventos e resultados na interface, com filtros por unidade, câmera e horário.
+A mídia fica inicialmente no PostgreSQL para acelerar a homologação. Depois de medir o volume real, os binários podem migrar para object storage sem alterar o modelo de eventos.
 
-Referência técnica para avaliar, **sem pressupor compatibilidade com todo firmware**: [HTTP API Intelbras](https://botminio.apps.intelbras.com.br/sdk-api/HTTP%20API%20V3.35_Intelbras.pdf). O documento descreve `VideoMotion` e `snapshot.cgi`, mas o suporte concreto deve ser medido no aparelho de prova.
+## Segurança
+
+- Portal protegido por Bearer token e HTTPS.
+- SFTP limitado por internal-sftp, chroot e sem shell/túnel.
+- Cada DVR usa `ingest_key` próprio.
+- Não exponha HTTP/37777/RTSP dos DVRs na internet para esta integração.
+
+## Desenvolvimento
+
+Requer Node.js 20+ e PostgreSQL.
+
+```bash
+npm ci
+npm test
+npm run check
+npm start
+```
