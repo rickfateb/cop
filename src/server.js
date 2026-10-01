@@ -49,7 +49,19 @@ async function applyDvrPatchFromEnv() {
   const row = result.rows[0];
 
   let cameraCount = 0;
-  if (patch.camera_policy || patch.camera_device_config) {
+  const cameraChannel = patch.camera_channel == null ? null : integer(Number(patch.camera_channel), 'Canal da câmera', 1, 32);
+  if (cameraChannel != null) {
+    const cameras = await pool.query('SELECT id,channel,name FROM cop_cameras WHERE dvr_id=$1 AND active=TRUE ORDER BY id', [row.id]);
+    if (cameras.rowCount !== 1) throw Error(`Atualização automática de canal exige exatamente 1 câmera ativa no DVR ${serial}; encontradas=${cameras.rowCount}`);
+    const camera = cameras.rows[0];
+    if (camera.channel !== cameraChannel) {
+      const conflict = await pool.query('SELECT id FROM cop_cameras WHERE dvr_id=$1 AND channel=$2 AND id<>$3 LIMIT 1', [row.id, cameraChannel, camera.id]);
+      if (conflict.rowCount) throw Error(`Canal ${cameraChannel} já está ocupado no DVR ${serial}`);
+      await pool.query('UPDATE cop_cameras SET channel=$2, updated_at=now() WHERE id=$1', [camera.id, cameraChannel]);
+      console.log(`COP câmera canal atualizado: id=${camera.id} de=${camera.channel} para=${cameraChannel}`);
+    }
+  }
+  if (patch.camera_policy || patch.camera_device_config || cameraChannel != null) {
     const cameraPolicy = patch.camera_policy ? validatePolicy(patch.camera_policy) : null;
     const deviceConfig = patch.camera_device_config && typeof patch.camera_device_config === 'object' && !Array.isArray(patch.camera_device_config)
       ? patch.camera_device_config : null;
