@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-const state = { token: '', data: null, unitId: null, edit: null, objectUrls: [], view: 'config', summaries: null };
+const state = { token: '', data: null, unitId: null, edit: null, objectUrls: [], view: 'config', summaries: null, investigations: null };
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]);
 const toast = (message, error = false) => { const el = $('#toast'); el.textContent = message; el.className = `show${error ? ' error' : ''}`; clearTimeout(toast.timer); toast.timer = setTimeout(() => el.className = '', 4000); };
 const accessLabel = mode => ({ sftp_push:'SFTP · DVR envia', ftp_push:'FTP · gateway', direct_http:'HTTP/RTSP direto', intelbras_cloud:'Intelbras Cloud · homologação', agent:'Agente legado', vpn:'VPN legada' }[mode] || mode);
@@ -28,14 +28,68 @@ async function api(path, method = 'GET', data) {
 }
 function setView(view) {
   state.view = view;
-  const config = view === 'config';
+  const config = view === 'config', summaries = view === 'summaries', investigations = view === 'investigations';
   $('#stats').hidden = !config;
   $('#ingest-status').hidden = !config;
   document.querySelector('.layout').hidden = !config;
-  $('#summaries-view').hidden = config;
+  $('#summaries-view').hidden = !summaries;
+  $('#investigations-view').hidden = !investigations;
   $('#add-unit').hidden = !config;
   $('#show-config').classList.toggle('active', config);
-  $('#show-summaries').classList.toggle('active', !config);
+  $('#show-summaries').classList.toggle('active', summaries);
+  $('#show-investigations').classList.toggle('active', investigations);
+}
+async function loadInvestigations() {
+  state.investigations = await api('investigations?limit=100');
+  renderInvestigations();
+}
+function investigationForm() {
+  const units=state.data?.units||[];
+  const unit=units.find(u=>u.id===state.unitId)||units[0];
+  const dvr=unit?.dvrs?.[0];
+  const cameras=dvr?.cameras||[];
+  const local=new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
+  return `<form id="investigation-form" class="investigation-form">
+    <div class="field"><label>Unidade</label><select name="unit_id">${units.map(u=>`<option value="${u.id}" ${u.id===unit?.id?'selected':''}>${escapeHtml(u.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>Data e horário de referência</label><input name="reference_at" type="datetime-local" value="${local}" required></div>
+    <div class="field"><label>Minutos antes</label><input name="before" type="number" min="0" max="60" value="5"></div>
+    <div class="field"><label>Minutos depois</label><input name="after" type="number" min="0" max="60" value="10"></div>
+    <div class="field wide"><label>Motivo da investigação</label><textarea name="reason" maxlength="2000" placeholder="Ex.: pagamento não localizado; revisão operacional; divergência de estoque." required></textarea></div>
+    <div class="field wide"><label>Canais</label><div id="investigation-channels" class="channel-checks">${cameras.map(cam=>`<label><input type="checkbox" name="channels" value="${cam.channel}" checked> Canal ${cam.channel} · ${escapeHtml(cam.name)}</label>`).join('')||'<span class="muted">Nenhuma câmera cadastrada.</span>'}</div></div>
+    <div class="wide investigation-note">O COP registrará a janela de busca agora. A recuperação do HD ficará como <b>aguardando conector Intelbras</b> até homologarmos o acesso histórico remoto.</div>
+    <div class="wide"><button class="primary" type="submit">Criar investigação</button></div>
+  </form>`;
+}
+function renderInvestigations() {
+  const rows=state.investigations?.investigations||[];
+  $('#investigations-view').innerHTML=`<div class="section-head"><div><div class="eyebrow">INVESTIGAÇÕES</div><h2>Investigação retroativa</h2><p>Solicite uma janela histórica do DVR e múltiplos canais para reconstrução posterior.</p></div><button class="ghost" id="refresh-investigations">Atualizar</button></div>
+  ${investigationForm()}
+  <div class="investigation-list">${rows.length?rows.map(row=>`<article class="summary-card">
+    <div class="summary-head"><div><strong>${escapeHtml(row.unit_name)} · ${dateTime(row.reference_at)}</strong><small>${escapeHtml(row.reason)}</small></div><span class="status-badge">${escapeHtml(row.status)}</span></div>
+    <div class="summary-meta"><span>Janela: -${Math.round(row.window_before_seconds/60)} min / +${Math.round(row.window_after_seconds/60)} min</span><span>Fonte: ${escapeHtml(row.source)}</span><span>Conector: ${escapeHtml(row.connector_status)}</span></div>
+    <div class="channel-checks compact">${(row.channels||[]).map(ch=>`<span>Canal ${ch.channel} · ${escapeHtml(ch.camera_name||'Câmera')} · ${escapeHtml(ch.status)}</span>`).join('')}</div>
+  </article>`).join(''):'<div class="empty"><strong>Nenhuma investigação criada.</strong>Use o formulário acima para registrar uma busca retroativa.</div>'}</div>`;
+  $('#refresh-investigations')?.addEventListener('click',()=>loadInvestigations().catch(e=>toast(e.message,true)));
+  $('#investigation-form')?.addEventListener('submit',submitInvestigation);
+  $('#investigation-form select[name="unit_id"]')?.addEventListener('change',()=>{state.unitId=Number($('#investigation-form select[name="unit_id"]').value);renderInvestigations();});
+}
+async function submitInvestigation(event) {
+  event.preventDefault();
+  const form=event.currentTarget,fd=new FormData(form);
+  const channels=[...form.querySelectorAll('input[name="channels"]:checked')].map(el=>Number(el.value));
+  if(!channels.length)return toast('Selecione pelo menos um canal.',true);
+  const local=String(fd.get('reference_at')||'');
+  const d=new Date(local);
+  if(Number.isNaN(d.getTime()))return toast('Informe data e horário válidos.',true);
+  try{
+    await api('investigations',{method:'POST',body:JSON.stringify({
+      unit_id:Number(fd.get('unit_id')),reference_at:d.toISOString(),
+      window_before_seconds:Number(fd.get('before'))*60,window_after_seconds:Number(fd.get('after'))*60,
+      reason:String(fd.get('reason')||''),source:'manual',channels
+    })});
+    toast('Investigação registrada.');
+    await loadInvestigations();
+  }catch(e){toast(e.message,true);}
 }
 async function loadSummaries() {
   state.summaries = await api('fraud/summaries?limit=100');
@@ -84,6 +138,7 @@ async function refresh() {
   if (!state.data.units.some(u => u.id === state.unitId)) state.unitId = state.data.units[0]?.id ?? null;
   render();
   if (state.view === 'summaries') await loadSummaries();
+  if (state.view === 'investigations') await loadInvestigations();
 }
 function render() {
   const { units, dvrs, cameras, recent_media: recent = [] } = state.data;
@@ -164,6 +219,7 @@ $('#login-form').addEventListener('submit', async e => { e.preventDefault(); sta
 $('#logout').addEventListener('click', () => { state.objectUrls.forEach(URL.revokeObjectURL); state.objectUrls=[]; state.token = ''; state.data = null; $('#workspace').hidden = true; $('#login').hidden = false; $('#logout').hidden = true; });
 $('#show-config').addEventListener('click', () => { setView('config'); });
 $('#show-summaries').addEventListener('click', () => { setView('summaries'); loadSummaries().catch(error => toast(error.message,true)); });
+$('#show-investigations').addEventListener('click', () => { setView('investigations'); loadInvestigations().catch(error => toast(error.message,true)); });
 $('#add-unit').addEventListener('click', () => edit('unit'));
 $('#refresh').addEventListener('click', () => refresh().then(() => toast('Dados atualizados.')).catch(error => toast(error.message,true)));
 $('#workspace').addEventListener('click', e => {
