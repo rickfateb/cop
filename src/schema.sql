@@ -171,3 +171,40 @@ CREATE TABLE IF NOT EXISTS cop_fraud_evidence (
 CREATE INDEX IF NOT EXISTS cop_fraud_incidents_pending_idx ON cop_fraud_incidents(alert_status,occurred_at);
 CREATE INDEX IF NOT EXISTS cop_fraud_incidents_unit_idx ON cop_fraud_incidents(unit_id,occurred_at DESC);
 CREATE INDEX IF NOT EXISTS cop_fraud_evidence_incident_idx ON cop_fraud_evidence(incident_id,evidence_order);
+
+
+CREATE TABLE IF NOT EXISTS cop_investigations (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  unit_id BIGINT NOT NULL REFERENCES cop_units(id),
+  dvr_id BIGINT NOT NULL REFERENCES cop_dvrs(id),
+  reference_at TIMESTAMPTZ NOT NULL,
+  window_before_seconds INTEGER NOT NULL DEFAULT 300 CHECK(window_before_seconds BETWEEN 0 AND 3600),
+  window_after_seconds INTEGER NOT NULL DEFAULT 600 CHECK(window_after_seconds BETWEEN 0 AND 3600),
+  reason TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'manual' CHECK(source IN ('manual','api','financial','stock','other')),
+  external_ref TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','waiting_connector','retrieving','ready','analyzing','completed','partial','failed','cancelled')),
+  connector_status TEXT NOT NULL DEFAULT 'not_available' CHECK(connector_status IN ('not_available','queued','running','done','partial','failed')),
+  requested_by TEXT,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS cop_investigation_channels (
+  investigation_id BIGINT NOT NULL REFERENCES cop_investigations(id) ON DELETE CASCADE,
+  camera_id BIGINT NOT NULL REFERENCES cop_cameras(id),
+  channel INTEGER NOT NULL CHECK(channel BETWEEN 1 AND 32),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','waiting_connector','retrieving','ready','failed','unavailable')),
+  requested_start_at TIMESTAMPTZ NOT NULL,
+  requested_end_at TIMESTAMPTZ NOT NULL,
+  retrieved_media_id BIGINT REFERENCES cop_media(id),
+  last_error TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(investigation_id,camera_id)
+);
+
+CREATE INDEX IF NOT EXISTS cop_investigations_unit_time_idx ON cop_investigations(unit_id,reference_at DESC);
+CREATE INDEX IF NOT EXISTS cop_investigations_status_idx ON cop_investigations(status,created_at);
+CREATE INDEX IF NOT EXISTS cop_investigation_channels_status_idx ON cop_investigation_channels(status,investigation_id);
