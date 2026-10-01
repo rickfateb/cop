@@ -46,7 +46,29 @@ async function applyDvrPatchFromEnv() {
       optional(patch.secret_ref, 120), accessMode]);
   if (!result.rowCount) throw Error(`DVR do patch não encontrado: ${serial}`);
   const row = result.rows[0];
-  console.log(`COP DVR patch aplicado: id=${row.id} nome=${row.name} serial=${row.cloud_serial} modelo=${row.model} canais=${row.channel_count} ingest=${row.access_mode} remoto=${row.remote_connection_mode} usuario=${row.access_username} porta=${row.service_port} segredo=${row.secret_ref} local=${row.ingest_key}`);
+
+  let cameraCount = 0;
+  if (patch.camera_policy || patch.camera_device_config) {
+    const cameraPolicy = patch.camera_policy ? validatePolicy(patch.camera_policy) : null;
+    const deviceConfig = patch.camera_device_config && typeof patch.camera_device_config === 'object' && !Array.isArray(patch.camera_device_config)
+      ? patch.camera_device_config : null;
+    const status = patch.camera_device_config_status || (deviceConfig ? 'pending' : null);
+    if (status && !['pending','confirmed','unsupported','error'].includes(status)) throw Error('Status de configuração do dispositivo inválido.');
+    const updated = await pool.query(`
+      UPDATE cop_cameras SET
+        active=TRUE,
+        policy=COALESCE($2::jsonb, policy),
+        device_config=COALESCE($3::jsonb, device_config),
+        device_config_status=COALESCE($4, device_config_status),
+        updated_at=now()
+      WHERE dvr_id=$1
+      RETURNING id,channel,name,policy,device_config,device_config_status
+    `, [row.id, cameraPolicy ? JSON.stringify(cameraPolicy) : null, deviceConfig ? JSON.stringify(deviceConfig) : null, status]);
+    cameraCount = updated.rowCount;
+    if (!cameraCount) throw Error(`Nenhuma câmera cadastrada para o DVR ${serial}`);
+  }
+
+  console.log(`COP DVR patch aplicado: id=${row.id} nome=${row.name} serial=${row.cloud_serial} modelo=${row.model} canais=${row.channel_count} ingest=${row.access_mode} remoto=${row.remote_connection_mode} usuario=${row.access_username} porta=${row.service_port} segredo=${row.secret_ref} local=${row.ingest_key} cameras_atualizadas=${cameraCount}`);
 }
 await applyDvrPatchFromEnv();
 const ingestWorker = startIngestWorker({ pool });
