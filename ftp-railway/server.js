@@ -265,7 +265,83 @@ const controlServer = net.createServer(socket => {
   socket.on('error',()=>cleanupData(session));
 });
 
+function makeLineReader(socket) {
+  socket.setEncoding('utf8');
+  let buffer = '';
+  const queue = [];
+  const waiters = [];
+  socket.on('data', chunk => {
+    buffer += chunk;
+    for (;;) {
+      const i = buffer.indexOf('\n');
+      if (i < 0) break;
+      const line = buffer.slice(0, i).replace(/\r$/, '');
+      buffer = buffer.slice(i + 1);
+      if (waiters.length) waiters.shift().resolve(line);
+      else queue.push(line);
+    }
+  });
+  socket.on('error', error => {
+    while (waiters.length) waiters.shift().reject(error);
+  });
+  return () => new Promise((resolve, reject) => {
+    if (queue.length) return resolve(queue.shift());
+    const timer = setTimeout(() => reject(Error('timeout resposta FTP')), 10000);
+    waiters.push({
+      resolve: line => { clearTimeout(timer); resolve(line); },
+      reject: error => { clearTimeout(timer); reject(error); }
+    });
+  });
+}
+
+async function runFtpSelfTest() {
+  const host = process.env.RAILWAY_TCP_PROXY_DOMAIN;
+  const port = Number(process.env.RAILWAY_TCP_PROXY_PORT || 0);
+  if (!host || !port) throw Error('proxy público de controle indisponível');
+  const sock = net.createConnection({ host, port });
+  await new Promise((resolve, reject) => {
+    sock.once('connect', resolve);
+    sock.once('error', reject);
+    setTimeout(() => reject(Error('timeout conexão controle')), 10000);
+  });
+  const next = makeLineReader(sock);
+  const expect = async (prefixes) => {
+    const line = await next();
+    if (!prefixes.some(p => line.startsWith(p))) throw Error('resposta inesperada: ' + line);
+    return line;
+  };
+  await expect(['220']);
+  sock.write('USER ' + user + '\r\n'); await expect(['331','230']);
+  sock.write('PASS ' + password + '\r\n'); await expect(['230']);
+  sock.write('PWD\r\n'); await expect(['257']);
+  sock.write('PASV\r\n');
+  const pasv = await expect(['227']);
+  const m = pasv.match(/\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)/);
+  if (!m) throw Error('PASV inválido: ' + pasv);
+  const dataHost = [m[1],m[2],m[3],m[4]].join('.');
+  const dataPort = Number(m[5]) * 256 + Number(m[6]);
+  const ds = net.createConnection({ host:dataHost, port:dataPort });
+  await new Promise((resolve, reject) => {
+    ds.once('connect', resolve);
+    ds.once('error', reject);
+    setTimeout(() => reject(Error('timeout conexão PASV')), 10000);
+  });
+  let listBytes = 0;
+  ds.on('data', chunk => { listBytes += chunk.length; });
+  const dataClosed = new Promise((resolve, reject) => {
+    ds.once('close', resolve);
+    ds.once('error', reject);
+  });
+  sock.write('LIST\r\n'); await expect(['150']);
+  await dataClosed;
+  await expect(['226']);
+  sock.write('QUIT\r\n'); await expect(['221']);
+  sock.end();
+  console.log(`FTP SELFTEST OK control=${host}:${port} pasv=${dataHost}:${dataPort} list_bytes=${listBytes}`);
+}
+
 controlServer.listen(controlPort,'0.0.0.0',()=>{
   console.log(`COP FTP control pronto em :${controlPort}; usuário=${user}`);
   console.log(`Railway TCP control: ${process.env.RAILWAY_TCP_PROXY_DOMAIN || 'sem-host'}:${process.env.RAILWAY_TCP_PROXY_PORT || 'sem-port'}`);
+  if (process.env.FTP_SELFTEST === 'true') setTimeout(() => runFtpSelfTest().catch(error => console.error('FTP SELFTEST FALHOU:', error.message)), 3000);
 });
