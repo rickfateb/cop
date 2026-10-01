@@ -9,8 +9,8 @@ import { accessModes, defaults, integer, models, nonEmpty, optional, validatePol
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const token = process.env.COP_ADMIN_TOKEN;
-if (!token || token.length < 24 || !process.env.DATABASE_URL) {
-  console.error('Configure COP_ADMIN_TOKEN (mínimo 24 caracteres) e DATABASE_URL.');
+if (!token || token.length < 12 || !process.env.DATABASE_URL) {
+  console.error('Configure COP_ADMIN_TOKEN (mínimo 12 caracteres) e DATABASE_URL.');
   process.exit(1);
 }
 const pool = new pg.Pool({
