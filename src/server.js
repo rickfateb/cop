@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { startIngestWorker } from './ingest.js';
 import { createGatewayIngest } from './gateway.js';
+import { startFraudAutomation, verifySignedMedia } from './fraud.js';
 import { accessModes, defaults, integer, models, nonEmpty, optional, validatePolicy } from './validation.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -105,6 +106,7 @@ async function ensureDvrIngestDirectories() {
 await ensureDvrIngestDirectories();
 const ingestWorker = startIngestWorker({ pool });
 const gatewayIngest = createGatewayIngest({ pool });
+const fraudAutomation = startFraudAutomation({ pool });
 
 const json = (res, status, data) => {
   res.writeHead(status, {
@@ -180,6 +182,36 @@ async function events(res, url) {
   json(res, 200, { events: result.rows });
 }
 
+async function fraudSummaries(res, url) {
+  const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 50));
+  const unitId = url.searchParams.get('unit_id');
+  const params = [];
+  const where = [];
+  if (unitId) { params.push(id(unitId)); where.push(`i.unit_id=${params.length}`); }
+  params.push(limit);
+  const incidents = (await pool.query(`
+    SELECT i.*,u.name AS unit_name,u.code AS unit_code,d.name AS dvr_name,c.name AS camera_name
+    FROM cop_fraud_incidents i
+    JOIN cop_units u ON u.id=i.unit_id
+    JOIN cop_dvrs d ON d.id=i.dvr_id
+    LEFT JOIN cop_cameras c ON c.id=i.camera_id
+    ${where.length ? 'WHERE '+where.join(' AND ') : ''}
+    ORDER BY i.occurred_at DESC,i.id DESC LIMIT ${params.length}`, params)).rows;
+  if (!incidents.length) return json(res,200,{incidents:[]});
+  const ids = incidents.map(row => row.id);
+  const evidence = (await pool.query(`
+    SELECT e.incident_id,e.evidence_order,m.id media_id,m.filename,m.frame_offset_seconds
+    FROM cop_fraud_evidence e JOIN cop_media m ON m.id=e.media_id
+    WHERE e.incident_id=ANY($1::bigint[]) ORDER BY e.incident_id,e.evidence_order`, [ids])).rows;
+  const byIncident = new Map();
+  for (const row of evidence) {
+    const key = String(row.incident_id);
+    if (!byIncident.has(key)) byIncident.set(key,[]);
+    byIncident.get(key).push(row);
+  }
+  json(res,200,{incidents:incidents.map(row=>({...row,evidence:byIncident.get(String(row.id))||[]}))});
+}
+
 async function media(res, mediaId) {
   const result = await pool.query('SELECT filename,content_type,bytes,data FROM cop_media WHERE id=$1', [id(mediaId)]);
   if (!result.rowCount) return json(res, 404, { error: 'Mídia não encontrada.' });
@@ -210,11 +242,17 @@ async function route(req, res) {
     });
     return res.end(contents);
   }
+  const shareMediaMatch = url.pathname.match(/^\/api\/share\/media\/([1-9]\d*)$/);
+  if (shareMediaMatch && req.method === 'GET') {
+    if (!verifySignedMedia(shareMediaMatch[1], url.searchParams.get('exp'), url.searchParams.get('sig'))) return json(res,403,{error:'Link de mídia inválido ou expirado.'});
+    return media(res, shareMediaMatch[1]);
+  }
   const externalMatch = url.pathname.match(/^\/api\/ingest\/external\/([A-Za-z0-9_-]{6,64})$/);
   if (externalMatch && req.method === 'POST') return gatewayIngest(req, res, externalMatch[1], json);
   if (!sameToken(req.headers.authorization?.replace(/^Bearer /, ''))) return json(res, 401, { error: 'Acesso não autorizado.' });
   if (url.pathname === '/api/config' && req.method === 'GET') return config(res);
   if (url.pathname === '/api/events' && req.method === 'GET') return events(res, url);
+  if (url.pathname === '/api/fraud/summaries' && req.method === 'GET') return fraudSummaries(res, url);
   const mediaMatch = url.pathname.match(/^\/api\/media\/([1-9]\d*)$/);
   if (mediaMatch && req.method === 'GET') return media(res, mediaMatch[1]);
 
@@ -270,6 +308,6 @@ const server = http.createServer((req,res) => route(req,res).catch(error => {
 }));
 server.listen(Number(process.env.PORT || 3000), '0.0.0.0', () => { const sftp=publicIngest(); console.log('COP pronto.'); console.log(`COP SFTP: ${sftp.host || 'sem-host'}:${sftp.port || 'sem-port'} -> ${sftp.internal_port}`); });
 for (const signal of ['SIGTERM','SIGINT']) process.on(signal, () => {
-  ingestWorker.stop();
+  ingestWorker.stop(); fraudAutomation.stop();
   server.close(() => pool.end().then(() => process.exit(0)));
 });
