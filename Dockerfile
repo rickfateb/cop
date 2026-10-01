@@ -1,7 +1,7 @@
 FROM node:20-bookworm-slim
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssh-server ca-certificates \
+  && apt-get install -y --no-install-recommends openssh-server ca-certificates ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
