@@ -176,7 +176,7 @@ const server = http.createServer((req,res) => route(req,res).catch(error => {
   const status = error.status || (error.code === '23505' ? 409 : error.code === '23503' || error.code === '23514' ? 400 : error instanceof pg.DatabaseError ? 500 : 400);
   json(res, status, { error: error.code === '23505' ? 'Sigla, canal ou identificador já cadastrado.' : status === 500 ? 'Erro ao consultar o banco de dados.' : error.message });
 }));
-server.listen(Number(process.env.PORT || 3000), '0.0.0.0', () => console.log('COP pronto.'));
+server.listen(Number(process.env.PORT || 3000), '0.0.0.0', () => { const sftp=publicIngest(); console.log('COP pronto.'); console.log(`COP SFTP: ${sftp.host || 'sem-host'}:${sftp.port || 'sem-port'} -> ${sftp.internal_port}`); });
 for (const signal of ['SIGTERM','SIGINT']) process.on(signal, () => {
   ingestWorker.stop();
   server.close(() => pool.end().then(() => process.exit(0)));
