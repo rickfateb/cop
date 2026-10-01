@@ -137,10 +137,10 @@ export function startIngestWorker({ pool, root = process.env.COP_INGEST_ROOT || 
           const base = path.basename(file, path.extname(file));
           const frameFilename = `${base}.frame-${String(frame.offset).padStart(3, '0')}s.jpg`;
           const frameInsert = await pool.query(`
-            INSERT INTO cop_media(event_id,unit_id,dvr_id,camera_id,detected_channel,stream_key,source,source_path,filename,content_type,bytes,sha256,data,expires_at,selected_for_ai)
-            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'image/jpeg',$10,$11,$12,$13,TRUE)
+            INSERT INTO cop_media(event_id,unit_id,dvr_id,camera_id,detected_channel,stream_key,source,source_path,filename,content_type,bytes,sha256,data,expires_at,selected_for_ai,frame_offset_seconds)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'image/jpeg',$10,$11,$12,$13,TRUE,$14)
             ON CONFLICT (dvr_id,source_path,sha256) DO NOTHING RETURNING id`,
-            [eventId, dvr.unit_id, dvr.id, cameraId, channel, streamKey, source, frameSourcePath, frameFilename, frame.data.length, frameSha, frame.data, expiresAt]);
+            [eventId, dvr.unit_id, dvr.id, cameraId, channel, streamKey, source, frameSourcePath, frameFilename, frame.data.length, frameSha, frame.data, expiresAt, frame.offset]);
           insertedMediaCount += frameInsert.rowCount;
         }
         logger.log(`COP frames IA: arquivo=${path.basename(file)} canal=${channel || 'n/a'} extraidos=${frames.length}`);
