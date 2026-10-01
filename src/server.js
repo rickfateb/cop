@@ -8,6 +8,7 @@ import { startIngestWorker } from './ingest.js';
 import { createGatewayIngest } from './gateway.js';
 import { startFraudAutomation, verifySignedMedia } from './fraud.js';
 import { createInvestigation, listInvestigations, investigationDetail } from './investigations.js';
+import { startInvestigationWorker } from './investigation-worker.js';
 import { accessModes, defaults, integer, models, nonEmpty, optional, validatePolicy } from './validation.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -108,6 +109,7 @@ await ensureDvrIngestDirectories();
 const ingestWorker = startIngestWorker({ pool });
 const gatewayIngest = createGatewayIngest({ pool });
 const fraudAutomation = startFraudAutomation({ pool });
+const investigationWorker = startInvestigationWorker({ pool });
 
 const json = (res, status, data) => {
   res.writeHead(status, {
@@ -328,6 +330,6 @@ const server = http.createServer((req,res) => route(req,res).catch(error => {
 }));
 server.listen(Number(process.env.PORT || 3000), '0.0.0.0', () => { const sftp=publicIngest(); console.log('COP pronto.'); console.log(`COP SFTP: ${sftp.host || 'sem-host'}:${sftp.port || 'sem-port'} -> ${sftp.internal_port}`); });
 for (const signal of ['SIGTERM','SIGINT']) process.on(signal, () => {
-  ingestWorker.stop(); fraudAutomation.stop();
+  ingestWorker.stop(); fraudAutomation.stop(); investigationWorker.stop();
   server.close(() => pool.end().then(() => process.exit(0)));
 });
