@@ -1,0 +1,6 @@
+build/
+sdk/
+recordings/
+*.dav
+*.mp4
+*.so*

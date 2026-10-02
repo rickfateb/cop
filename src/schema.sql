@@ -215,4 +215,41 @@ ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_rtsp_port INTEGER;
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_username TEXT;
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_password_ref TEXT;
 ALTER TABLE cop_dvrs DROP CONSTRAINT IF EXISTS cop_dvrs_playback_mode_check;
-ALTER TABLE cop_dvrs ADD CONSTRAINT cop_dvrs_playback_mode_check CHECK(playback_mode IN ('unavailable','rtsp_direct','agent','cloud'));
+ALTER TABLE cop_dvrs ADD CONSTRAINT cop_dvrs_playback_mode_check CHECK(playback_mode IN ('unavailable','rtsp_direct','agent','cloud','netsdk_autoregister'));
+
+-- A gravação retroativa pertence à investigação e pode não ter evento de movimento.
+ALTER TABLE cop_media ALTER COLUMN event_id DROP NOT NULL;
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS autoregister_id TEXT;
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS sdk_connector_name TEXT NOT NULL DEFAULT 'hostinger';
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS sdk_online BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS sdk_last_seen_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS cop_dvrs_autoregister_id_uq ON cop_dvrs(sdk_connector_name,autoregister_id) WHERE autoregister_id IS NOT NULL;
+ALTER TABLE cop_investigation_channels ADD COLUMN IF NOT EXISTS sdk_lease_token TEXT;
+ALTER TABLE cop_investigation_channels ADD COLUMN IF NOT EXISTS sdk_lease_until TIMESTAMPTZ;
+ALTER TABLE cop_investigation_channels ADD COLUMN IF NOT EXISTS sdk_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE cop_investigation_channels ADD COLUMN IF NOT EXISTS sdk_next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE cop_investigation_channels ADD COLUMN IF NOT EXISTS retrieval_metadata JSONB;
+
+CREATE TABLE IF NOT EXISTS cop_servers (
+ id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ name TEXT NOT NULL, connector_name TEXT NOT NULL UNIQUE,
+ host TEXT NOT NULL, ssh_port INTEGER NOT NULL DEFAULT 22 CHECK(ssh_port BETWEEN 1 AND 65535),
+ registration_port INTEGER NOT NULL DEFAULT 8000 CHECK(registration_port BETWEEN 1 AND 65535),
+ access_username TEXT, storage_root TEXT NOT NULL,
+ token_cipher TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+ access_password_cipher TEXT, private_key_cipher TEXT,
+ active BOOLEAN NOT NULL DEFAULT TRUE,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS cop_server_directories (
+ id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ server_id BIGINT NOT NULL REFERENCES cop_servers(id),
+ directory_name TEXT NOT NULL, friendly_name TEXT NOT NULL,
+ UNIQUE(server_id,directory_name), UNIQUE(id,server_id)
+);
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS server_id BIGINT REFERENCES cop_servers(id);
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS server_directory_id BIGINT;
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS access_password_cipher TEXT;
+ALTER TABLE cop_dvrs DROP CONSTRAINT IF EXISTS cop_dvrs_server_directory_fk;
+ALTER TABLE cop_dvrs ADD CONSTRAINT cop_dvrs_server_directory_fk
+ FOREIGN KEY(server_directory_id,server_id) REFERENCES cop_server_directories(id,server_id);
