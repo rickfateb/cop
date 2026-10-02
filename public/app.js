@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-const state = { token: '', data: null, unitId: null, edit: null, objectUrls: [], view: 'config', summaries: null, investigations: null };
+const state = { user: null, data: null, unitId: null, edit: null, objectUrls: [], view: 'config', summaries: null, investigations: null };
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]);
 const toast = (message, error = false) => { const el = $('#toast'); el.textContent = message; el.className = `show${error ? ' error' : ''}`; clearTimeout(toast.timer); toast.timer = setTimeout(() => el.className = '', 4000); };
 const accessLabel = mode => ({ sftp_push:'SFTP · DVR envia', ftp_push:'FTP · gateway', direct_http:'HTTP/RTSP direto', intelbras_cloud:'Intelbras Cloud · homologação', agent:'Agente legado', vpn:'VPN legada' }[mode] || mode);
@@ -21,8 +21,9 @@ function ensureShell() {
 }
 ensureShell();
 async function api(path, method = 'GET', data) {
-  const response = await fetch(`/api/${path}`, { method, headers: { Authorization: `Bearer ${state.token}`, ...(data ? { 'Content-Type': 'application/json' } : {}) }, body: data ? JSON.stringify(data) : undefined });
+  const response = await fetch(`/api/${path}`, { method, headers: { ...(data ? { 'Content-Type': 'application/json' } : {}) }, body: data ? JSON.stringify(data) : undefined });
   const result = await response.json();
+  if(response.status===401&&!path.startsWith('auth/')){resetSession();initLogin().catch(()=>{});}
   if (!response.ok) throw Error(result.error || `Erro ${response.status}`);
   return result;
 }
@@ -71,7 +72,7 @@ function renderInvestigations() {
     <div class="summary-meta"><span>Janela: -${Math.round(row.window_before_seconds/60)} min / +${Math.round(row.window_after_seconds/60)} min</span><span>Fonte: ${escapeHtml(row.source)}</span><span>Conector: ${escapeHtml(row.connector_status)}</span></div>
     <div class="channel-checks compact">${(row.channels||[]).map(ch=>`<span>Canal ${ch.channel} · ${escapeHtml(ch.camera_name||'Câmera')} · ${escapeHtml(ch.status)}${ch.last_error?' · '+escapeHtml(ch.last_error):''}${ch.retrieved_media_id?` <button class="ghost" data-investigation-video="${ch.retrieved_media_id}">Assistir</button>`:''}</span>`).join('')}</div>
   </article>`).join(''):'<div class="empty"><strong>Nenhuma investigação criada.</strong>Use o formulário acima para registrar uma busca retroativa.</div>'}</div>`;
-  for(const button of document.querySelectorAll('[data-investigation-video]'))button.addEventListener('click',async()=>{try{const response=await fetch(`/api/media/${button.dataset.investigationVideo}`,{headers:{Authorization:`Bearer ${state.token}`}});if(!response.ok)throw Error('Não foi possível carregar o vídeo.');const url=URL.createObjectURL(await response.blob());state.objectUrls.push(url);const video=document.createElement('video');video.controls=true;video.src=url;video.style.maxWidth='100%';button.replaceWith(video);}catch(e){toast(e.message,true);}});
+  for(const button of document.querySelectorAll('[data-investigation-video]'))button.addEventListener('click',async()=>{try{const response=await fetch(`/api/media/${button.dataset.investigationVideo}`,{credentials:'same-origin'});if(!response.ok)throw Error('Não foi possível carregar o vídeo.');const url=URL.createObjectURL(await response.blob());state.objectUrls.push(url);const video=document.createElement('video');video.controls=true;video.src=url;video.style.maxWidth='100%';button.replaceWith(video);}catch(e){toast(e.message,true);}});
   $('#refresh-investigations')?.addEventListener('click',()=>loadInvestigations().catch(e=>toast(e.message,true)));
   $('#investigation-form')?.addEventListener('submit',submitInvestigation);
   $('#investigation-form select[name="unit_id"]')?.addEventListener('change',()=>{state.unitId=Number($('#investigation-form select[name="unit_id"]').value);renderInvestigations();});
@@ -123,7 +124,7 @@ async function loadSummaryMedia() {
   for (const el of document.querySelectorAll('[data-summary-media],[data-summary-video]')) {
     const id = el.dataset.summaryMedia || el.dataset.summaryVideo;
     try {
-      const response = await fetch(`/api/media/${id}`, { headers: { Authorization: `Bearer ${state.token}` } });
+      const response = await fetch(`/api/media/${id}`, {credentials:'same-origin'});
       if (!response.ok) continue;
       const url = URL.createObjectURL(await response.blob()); state.objectUrls.push(url); el.src = url;
     } catch {}
@@ -182,7 +183,7 @@ function renderRecent(items) {
 async function loadThumbs() {
   for (const img of document.querySelectorAll('[data-media-thumb]')) {
     try {
-      const response = await fetch(`/api/media/${img.dataset.mediaThumb}`, { headers: { Authorization: `Bearer ${state.token}` } });
+      const response = await fetch(`/api/media/${img.dataset.mediaThumb}`, {credentials:'same-origin'});
       if (!response.ok) continue;
       const url = URL.createObjectURL(await response.blob()); state.objectUrls.push(url); img.src = url;
     } catch {}
@@ -242,8 +243,12 @@ function payload(form, type) {
       analysis_mode:value(form,'analysis_mode'), analysis_after_seconds:number(form,'analysis_after_seconds'),
       retention_days:number(form,'retention_days') } };
 }
-$('#login-form').addEventListener('submit', async e => { e.preventDefault(); state.token = $('#token').value; try { await refresh(); $('#login').hidden = true; $('#workspace').hidden = false; $('#logout').hidden = false; $('#token').value = ''; } catch (error) { state.token = ''; toast(error.message, true); } });
-$('#logout').addEventListener('click', () => { state.objectUrls.forEach(URL.revokeObjectURL); state.objectUrls=[]; state.token = ''; state.data = null; $('#workspace').hidden = true; $('#login').hidden = false; $('#logout').hidden = true; });
+function resetSession(){state.objectUrls.forEach(URL.revokeObjectURL);state.objectUrls=[];state.user=null;state.data=null;if($('#editor').open)$('#editor').close();$('#workspace').hidden=true;$('#login').hidden=false;$('#logout').hidden=true;$('#current-user').textContent='Acesso administrativo';}
+async function enterWorkspace(user){state.user=user;await refresh();$('#login').hidden=true;$('#workspace').hidden=false;$('#logout').hidden=false;$('#current-user').textContent=user.name||user.email;$('#google-login').replaceChildren();}
+let googleScript;
+async function initLogin(){try{const session=await api('auth/session');if(session.user){await enterWorkspace(session.user);return;}$('#login-message').textContent='Entre com sua conta Google para continuar.';if(!googleScript)googleScript=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='https://accounts.google.com/gsi/client';script.async=true;script.onload=resolve;script.onerror=()=>reject(Error('Não foi possível carregar o login Google. Recarregue a página.'));document.head.appendChild(script);});await googleScript;window.google.accounts.id.initialize({client_id:session.client_id,nonce:session.nonce,auto_select:false,callback:async response=>{try{const result=await api('auth/google','POST',{credential:response.credential});await enterWorkspace(result.user);}catch(e){$('#login-message').textContent=e.message;toast(e.message,true);}}});$('#google-login').replaceChildren();window.google.accounts.id.renderButton($('#google-login'),{theme:'outline',size:'large',text:'signin_with',width:Math.min(360,$('#google-login').clientWidth||320),locale:'pt-BR'});}catch(e){$('#login-message').textContent=e.message;}}
+$('#logout').addEventListener('click',async()=>{try{await api('auth/logout','POST',{});window.google?.accounts.id.disableAutoSelect();resetSession();await initLogin();}catch(e){toast(e.message,true);}});
+initLogin();
 $('#show-servers').addEventListener('click',()=>{setView('servers');renderServers();});
 $('#show-config').addEventListener('click', () => { setView('config'); });
 $('#show-summaries').addEventListener('click', () => { setView('summaries'); loadSummaries().catch(error => toast(error.message,true)); });

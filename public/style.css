@@ -12,3 +12,5 @@
 .secret-control{display:flex;gap:6px;align-items:center;margin-top:7px}.secret-control input{margin:0;min-width:0;flex:1}.secret-control button{font-size:12px;padding:10px}.directory-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}#servers-view>.dvr{margin-top:18px}
 
 .secret-control textarea{flex:1;min-width:0;font:inherit;border:1px solid #d8e3e5;border-radius:8px;padding:11px}.masked-secret{-webkit-text-security:disc}
+
+#google-login{margin-top:25px;min-height:44px}.login-message{line-height:1.5}
