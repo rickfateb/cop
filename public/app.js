@@ -33,6 +33,8 @@ function setView(view) {
   $('#stats').hidden = !config;
   $('#ingest-status').hidden = !config;
   document.querySelector('.layout').hidden = !config;
+  $('#archive-view').hidden = view!=='archive';
+  $('#show-archive').classList.toggle('active',view==='archive');
   $('#servers-view').hidden = view!=='servers';
   $('#show-servers').classList.toggle('active',view==='servers');
   $('#summaries-view').hidden = !summaries;
@@ -223,7 +225,7 @@ function edit(type, row = null, parentId = null) {
   if (type === 'camera') {
     const dvrId = row?.dvr_id ?? parentId;
     const p = row?.policy ?? defaults;
-    form.innerHTML = `${select('dvr_id','DVR',dvrId,dvrs.map(d => [d.id,`${units.find(u => u.id === d.unit_id)?.name ?? ''} · ${d.name}`]))}<div class="row">${field('channel','Número do canal',row?.channel ?? 1,'number','min="1" max="32" required')}${field('name','Nome da câmera',row?.name,'text','required')}</div>${field('area','Área observada',row?.area,'text','placeholder="Entrada, caixa, corredor..."')}<div class="note">No modo SFTP, o DVR envia as fotos de DM. Os marcos abaixo orientam a seleção futura de frames para IA e podem chegar a 600 s.</div>${checked('enabled','Usar imagens deste canal no COP',p.enabled)}${field('offsets','Marcos de análise em segundos',p.offsets.join(', '),'text','required')}<div class="row">${field('cooldown_seconds','Pausa entre eventos (s)',p.cooldown_seconds,'number','min="0" max="3600" required')}${field('min_motion_seconds','Duração mínima (s)',p.min_motion_seconds,'number','min="0" max="600" required')}</div>${select('analysis_mode','Enviar para análise por IA',p.analysis_mode,[['off','Não enviar'],['manual','Somente sob comando'],['always','A cada evento válido'],['duration','Após duração mínima']])}<div class="row">${field('analysis_after_seconds','Duração para IA (s)',p.analysis_after_seconds,'number','min="0" max="3600" required')}${field('retention_days','Guardar mídia por (dias)',p.retention_days,'number','min="1" max="365" required')}</div>${checked('active','Câmera ativa',row?.active ?? true)}`;
+    form.innerHTML = `${select('dvr_id','DVR',dvrId,dvrs.map(d => [d.id,`${units.find(u => u.id === d.unit_id)?.name ?? ''} · ${d.name}`]))}<div class="row">${field('channel','Número do canal',row?.channel ?? 1,'number','min="1" max="32" required')}${field('name','Nome da câmera',row?.name,'text','required')}</div>${field('area','Área observada',row?.area,'text','placeholder="Entrada, caixa, corredor..."')}<div class="note">No modo SFTP, o DVR envia as fotos de DM. Os marcos abaixo orientam a seleção futura de frames para IA e podem chegar a 600 s.</div>${checked('enabled','Usar imagens deste canal no COP',p.enabled)}${field('offsets','Marcos de análise em segundos',p.offsets.join(', '),'text','required')}<div class="row">${field('cooldown_seconds','Pausa entre eventos (s)',p.cooldown_seconds,'number','min="0" max="3600" required')}${field('min_motion_seconds','Duração mínima (s)',p.min_motion_seconds,'number','min="0" max="600" required')}</div>${select('analysis_mode','Enviar para análise por IA',p.analysis_mode,[['off','Não enviar'],['manual','Somente sob comando'],['always','A cada evento válido'],['duration','Após duração mínima']])}<div class="row">${field('analysis_after_seconds','Duração para IA (s)',p.analysis_after_seconds,'number','min="0" max="3600" required')}${field('retention_days','Guardar mídia local por (dias)',15,'number','readonly required')}</div>${checked('active','Câmera ativa',row?.active ?? true)}`;
   }
   if(type==='dvr'){updateDirectories(row?.server_directory_id);form.querySelector('[name=server_id]').addEventListener('change',()=>updateDirectories());}
   $('#editor').showModal();
@@ -271,3 +273,10 @@ $('#edit-form').addEventListener('submit', async e => {
   catch(error) { toast(error.message,true); }
 });
 
+
+async function renderArchive(){
+ const s=await api('archive/status');
+ $('#archive-view').innerHTML=`<div class="section-head"><div><div class="eyebrow">ARQUIVAMENTO</div><h2>Google Drive</h2><p>${s.configured?'Integração configurada':'Aguardando autorização do Google Drive para o servidor'}</p></div><button class="ghost" id="refresh-archive">Atualizar</button></div><p>Envio diário entre 01h e 06h, no horário de São Paulo. Inclui arquivos recebidos nos dias anteriores e novas tentativas.</p><p><strong>COP / Ano / Mês / DVR / Dia da gravação</strong></p><p>A cópia local fica por 15 dias após o recebimento. A remoção exige conferência da cópia no Drive; sem autorização ou em caso de falha, o arquivo local é preservado.</p><div class="summary-meta"><span>Arquivados: ${s.archived}</span><span>Pendentes: ${s.pending}</span><span>Com erro: ${s.errors}</span><span>Somente no Drive: ${s.local_released}</span></div>${s.root_url?`<p><a href="${escapeHtml(s.root_url)}" target="_blank" rel="noopener">Abrir pasta COP no Drive</a></p>`:''}${s.last_error?`<p>Último estado: ${escapeHtml(s.last_error)}</p>`:''}<p class="hint">Se a data original não puder ser identificada, o arquivo é preservado e sinalizado para revisão.</p>`;
+ $('#refresh-archive').addEventListener('click',()=>renderArchive().catch(e=>toast(e.message,true)));
+}
+$('#show-archive').addEventListener('click',()=>{setView('archive');renderArchive().catch(e=>toast(e.message,true));});

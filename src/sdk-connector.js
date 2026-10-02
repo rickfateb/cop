@@ -122,7 +122,7 @@ export async function completeSdkJob(pool,inv,cam,lease,data,metadata) {
   const expected=(new Date(row.requested_end_at)-new Date(row.requested_start_at))/1000;
   validateSdkVideo(data,metadata.duration_seconds,expected);
   const mediaId=await storePlayback(client,{id:inv,unit_id:row.unit_id,dvr_id:row.dvr_id},
-   {camera_id:cam,channel:row.channel},{data,contentType:'video/mp4',filename:`investigacao-${inv}-canal-${row.channel}.mp4`});
+   {camera_id:cam,channel:row.channel,requested_start_at:row.requested_start_at},{data,contentType:'video/mp4',filename:`investigacao-${inv}-canal-${row.channel}.mp4`});
   await client.query(`UPDATE cop_investigation_channels SET status='ready',retrieved_media_id=$3,
    retrieval_metadata=$4,sdk_lease_until=NULL,last_error=NULL,updated_at=now() WHERE investigation_id=$1 AND camera_id=$2`,
    [inv,cam,mediaId,JSON.stringify({duration_seconds:metadata.duration_seconds,source:'netsdk_autoregister',trimmed_from_dvr_timestamps:true})]);

@@ -264,3 +264,21 @@ CREATE TABLE IF NOT EXISTS cop_user_sessions (
 );
 CREATE INDEX IF NOT EXISTS cop_user_sessions_expiry_idx ON cop_user_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS cop_login_nonces_expiry_idx ON cop_login_nonces(expires_at);
+
+-- Preserve catalogue and evidence links after local payload release.
+ALTER TABLE cop_media ALTER COLUMN data DROP NOT NULL;
+ALTER TABLE cop_media ADD COLUMN IF NOT EXISTS recorded_at TIMESTAMPTZ;
+ALTER TABLE cop_media ADD COLUMN IF NOT EXISTS drive_file_id TEXT;
+ALTER TABLE cop_media ADD COLUMN IF NOT EXISTS drive_folder_id TEXT;
+ALTER TABLE cop_media ADD COLUMN IF NOT EXISTS drive_verified_at TIMESTAMPTZ;
+ALTER TABLE cop_media ADD COLUMN IF NOT EXISTS drive_md5 TEXT;
+ALTER TABLE cop_media ADD COLUMN IF NOT EXISTS drive_error TEXT;
+ALTER TABLE cop_media ADD COLUMN IF NOT EXISTS drive_next_attempt_at TIMESTAMPTZ;
+ALTER TABLE cop_media ADD COLUMN IF NOT EXISTS local_released_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS cop_media_drive_file_uq ON cop_media(drive_file_id) WHERE drive_file_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS cop_media_archive_pending ON cop_media(received_at) WHERE drive_verified_at IS NULL AND data IS NOT NULL;
+-- One-time migrations: minimum 15 days, and original timestamp for retrieved footage.
+UPDATE cop_media SET expires_at=received_at+interval '15 days' WHERE expires_at<received_at+interval '15 days';
+UPDATE cop_cameras SET policy=jsonb_set(policy,'{retention_days}','15'::jsonb) WHERE (policy->>'retention_days')::integer IS DISTINCT FROM 15;
+UPDATE cop_media m SET recorded_at=c.requested_start_at FROM cop_investigation_channels c
+ WHERE c.retrieved_media_id=m.id AND m.recorded_at IS NULL;

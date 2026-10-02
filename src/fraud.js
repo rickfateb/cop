@@ -105,10 +105,10 @@ async function ensureReviewVideo(pool, eventId, evidenceRows, logger) {
     const sha = createHash('sha256').update(mp4).digest('hex');
     const name = original.filename.replace(/\.[^.]+$/, '') + '.review.mp4';
     const inserted = await pool.query(`
-      INSERT INTO cop_media(event_id,unit_id,dvr_id,camera_id,detected_channel,stream_key,source,source_path,filename,content_type,bytes,sha256,data,expires_at,selected_for_ai)
-      VALUES($1,$2,$3,$4,$5,$6,'derived',$7,$8,'video/mp4',$9,$10,$11,$12,FALSE)
+      INSERT INTO cop_media(event_id,unit_id,dvr_id,camera_id,detected_channel,stream_key,source,source_path,filename,content_type,bytes,sha256,data,expires_at,selected_for_ai,recorded_at)
+      VALUES($1,$2,$3,$4,$5,$6,'derived',$7,$8,'video/mp4',$9,$10,$11,$12,FALSE,$13)
       ON CONFLICT(dvr_id,source_path,sha256) DO NOTHING RETURNING id`,
-      [eventId,original.unit_id,original.dvr_id,original.camera_id,original.detected_channel,original.stream_key,reviewPath,name,mp4.length,sha,mp4,original.expires_at]);
+      [eventId,original.unit_id,original.dvr_id,original.camera_id,original.detected_channel,original.stream_key,reviewPath,name,mp4.length,sha,mp4,original.expires_at,original.recorded_at]);
     if (inserted.rowCount) return inserted.rows[0].id;
     const found = await pool.query('SELECT id FROM cop_media WHERE event_id=$1 AND source_path=$2 ORDER BY id DESC LIMIT 1',[eventId,reviewPath]);
     return found.rows[0]?.id || null;
@@ -256,3 +256,4 @@ export function startFraudAutomation({ pool, logger=console }={}) {
   void tick();
   return {stop(){stopped=true;if(timer)clearTimeout(timer);}};
 }
+
