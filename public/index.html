@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>COP · Cobile</title><link rel="stylesheet" href="/style.css"></head><body>
-<header><div class="brand"><span class="mark">◉</span><div><strong>COP</strong><small>Cobile · Central de Operações</small></div></div><div class="topright"><span class="pill">Configuração inicial</span><button id="logout" class="ghost" hidden>Sair</button></div></header>
+<header><div class="brand"><span class="mark">◉</span><div><strong>COP</strong><small>Cobile · Central de Operações</small></div></div><div class="topright"><span class="pill" id="current-user">Acesso administrativo</span><button id="logout" class="ghost" hidden>Sair</button></div></header>
 <main>
-<section id="login" class="login panel"><div class="eyebrow">ACESSO ADMINISTRATIVO</div><h1>Central de câmeras</h1><p>Configure as unidades, os gravadores e quais imagens serão capturadas quando houver movimento.</p><form id="login-form"><label>Chave de acesso<input id="token" type="password" autocomplete="off" required placeholder="COP_ADMIN_TOKEN"></label><button class="primary">Entrar no portal</button></form><p class="hint">A chave permanece apenas nesta aba do navegador.</p></section>
+<section id="login" class="login panel"><div class="eyebrow">ACESSO ADMINISTRATIVO</div><h1>Central de câmeras</h1><p>Configure as unidades, os gravadores e quais imagens serão capturadas quando houver movimento.</p><div id="google-login"></div><p id="login-message" class="hint" role="status">Preparando acesso com Google…</p><p class="hint">Acesso restrito às contas administrativas autorizadas. Sua sessão fica salva por até 30 dias neste navegador.</p></section>
 <div id="workspace" hidden>
 <div class="intro"><div><div class="eyebrow">VISÃO GERAL</div><h1>Portal COP</h1><p>Gerencie a coleta de imagens das lojas Facinho por unidade e por câmera.</p></div><div class="view-actions"><button class="ghost active" id="show-config">Configuração</button><button class="ghost" id="show-servers">Servidores</button><button class="ghost" id="show-summaries">Resumos</button><button class="ghost" id="show-investigations">Investigações</button><button class="primary" id="add-unit">+ Nova unidade</button></div></div>
 <section id="stats" class="stats"></section>

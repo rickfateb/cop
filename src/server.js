@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {createGoogleAuth} from './google-auth.js';
 import { createInfrastructureApi, publicServerSql, publicDvrSql, redactDvr, deviceAssignment, encryptSecret } from './infrastructure.js';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -153,6 +154,7 @@ const publicIngest = () => ({
   internal_port: Number(process.env.SFTP_PORT || 2222)
 });
 
+const googleAuth=createGoogleAuth({pool,json,readJson:body});
 const infrastructureApi=createInfrastructureApi({pool,json,readJson:body});
 async function config(res) {
   const [u,d,c,m,e,received,servers,directories] = await Promise.all([
@@ -261,8 +263,9 @@ async function route(req, res) {
     const contents = await readFile(path.join(root, 'public', entry[0]));
     res.writeHead(200, {
       'Content-Type': `${entry[1]}; charset=utf-8`, 'Cache-Control': 'no-store',
-      'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
-      'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer'
+      'Content-Security-Policy': "default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' https://accounts.google.com/gsi/style; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; frame-ancestors 'none'",
+      'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'Cross-Origin-Opener-Policy':'same-origin-allow-popups'
     });
     return res.end(contents);
   }
@@ -273,8 +276,14 @@ async function route(req, res) {
   }
   const externalMatch = url.pathname.match(/^\/api\/ingest\/external\/([A-Za-z0-9_-]{6,64})$/);
   if (externalMatch && req.method === 'POST') return gatewayIngest(req, res, externalMatch[1], json);
+  if(await googleAuth.handle(req,res,url))return;
   if(url.pathname.startsWith('/api/sdk/'))return sdkApi(req,res,url);
-  if (!sameToken(req.headers.authorization?.replace(/^Bearer /, ''))) return json(res, 401, { error: 'Acesso não autorizado.' });
+  if (!sameToken(req.headers.authorization?.replace(/^Bearer /, ''))) {
+    const user=await googleAuth.user(req);
+    if(!user)return json(res,401,{error:'Entre com Google para acessar o COP.'});
+    if(!['GET','HEAD'].includes(req.method))googleAuth.ensureOrigin(req);
+    req.copUser=user;
+  }
   if(/^\/api\/(servers|server-directories)(\/|$)/.test(url.pathname)||/^\/api\/dvrs\/[1-9]\d*\/credentials$/.test(url.pathname))return infrastructureApi(req,res,url);
   const playbackMatch=url.pathname.match(/^\/api\/dvrs\/([1-9]\d*)\/playback$/);
   if(playbackMatch&&req.method==='PUT'){

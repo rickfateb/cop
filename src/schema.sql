@@ -253,3 +253,14 @@ ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS access_password_cipher TEXT;
 ALTER TABLE cop_dvrs DROP CONSTRAINT IF EXISTS cop_dvrs_server_directory_fk;
 ALTER TABLE cop_dvrs ADD CONSTRAINT cop_dvrs_server_directory_fk
  FOREIGN KEY(server_directory_id,server_id) REFERENCES cop_server_directories(id,server_id);
+
+CREATE TABLE IF NOT EXISTS cop_login_nonces (
+ nonce_hash TEXT PRIMARY KEY, expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cop_user_sessions (
+ token_hash TEXT PRIMARY KEY, google_sub TEXT NOT NULL,
+ email TEXT NOT NULL, name TEXT NOT NULL,
+ expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cop_user_sessions_expiry_idx ON cop_user_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS cop_login_nonces_expiry_idx ON cop_login_nonces(expires_at);
