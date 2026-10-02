@@ -58,6 +58,7 @@ def main():
     os.chmod(state, 0o700)
     config_path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
     os.chown(config_path.parent, 0, group.gr_gid)
+    os.chmod(config_path.parent, 0o750)  # mkdir mode is reduced by the private umask.
     config = {"cop_url": "https://cop.cobile.com.br", "connector_name": remote["connector_name"] if remote else "hostinger",
               "portal_managed": bool(remote),
               "connector_token": token, "sdk_so": str(sdk / "bin/libdhnetsdk.so"),
