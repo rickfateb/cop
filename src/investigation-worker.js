@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { retrieveIntelbrasRtsp } from './playback.js';
 
-async function storePlayback(pool,investigation,channel,result){
+export async function storePlayback(pool,investigation,channel,result){
  const sha=createHash('sha256').update(result.data).digest('hex');
  const expiresAt=new Date(Date.now()+15*86400000);
  const sourcePath=`investigation/${investigation.id}/channel-${channel.channel}/${result.filename}`;
@@ -51,7 +51,7 @@ async function processInvestigation(pool,investigation,logger){
 export function startInvestigationWorker({pool,logger=console,intervalMs=15000}={}){
  let stopped=false,busy=false,timer;
  const tick=async()=>{if(stopped||busy)return;busy=true;try{
-  const rows=(await pool.query(`SELECT * FROM cop_investigations WHERE status IN ('pending','waiting_connector','retrieving') ORDER BY created_at,id LIMIT 2`)).rows;
+  const rows=(await pool.query(`SELECT i.* FROM cop_investigations i JOIN cop_dvrs d ON d.id=i.dvr_id WHERE i.status IN ('pending','waiting_connector','retrieving') AND d.playback_mode<>'netsdk_autoregister' ORDER BY i.created_at,i.id LIMIT 2`)).rows;
   for(const row of rows)await processInvestigation(pool,row,logger);
  }catch(e){logger.error('COP investigation worker:',e.message);}finally{busy=false;if(!stopped)timer=setTimeout(tick,intervalMs);}};
  void tick();return{stop(){stopped=true;if(timer)clearTimeout(timer);}};

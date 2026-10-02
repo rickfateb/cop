@@ -215,4 +215,17 @@ ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_rtsp_port INTEGER;
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_username TEXT;
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_password_ref TEXT;
 ALTER TABLE cop_dvrs DROP CONSTRAINT IF EXISTS cop_dvrs_playback_mode_check;
-ALTER TABLE cop_dvrs ADD CONSTRAINT cop_dvrs_playback_mode_check CHECK(playback_mode IN ('unavailable','rtsp_direct','agent','cloud'));
+ALTER TABLE cop_dvrs ADD CONSTRAINT cop_dvrs_playback_mode_check CHECK(playback_mode IN ('unavailable','rtsp_direct','agent','cloud','netsdk_autoregister'));
+
+-- A gravação retroativa pertence à investigação e pode não ter evento de movimento.
+ALTER TABLE cop_media ALTER COLUMN event_id DROP NOT NULL;
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS autoregister_id TEXT;
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS sdk_connector_name TEXT NOT NULL DEFAULT 'hostinger';
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS sdk_online BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS sdk_last_seen_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS cop_dvrs_autoregister_id_uq ON cop_dvrs(sdk_connector_name,autoregister_id) WHERE autoregister_id IS NOT NULL;
+ALTER TABLE cop_investigation_channels ADD COLUMN IF NOT EXISTS sdk_lease_token TEXT;
+ALTER TABLE cop_investigation_channels ADD COLUMN IF NOT EXISTS sdk_lease_until TIMESTAMPTZ;
+ALTER TABLE cop_investigation_channels ADD COLUMN IF NOT EXISTS sdk_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE cop_investigation_channels ADD COLUMN IF NOT EXISTS sdk_next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE cop_investigation_channels ADD COLUMN IF NOT EXISTS retrieval_metadata JSONB;

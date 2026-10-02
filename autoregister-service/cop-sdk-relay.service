@@ -1,0 +1,26 @@
+[Unit]
+Description=COP Intelbras SDK Auto Registro
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cop-pilot
+Group=cop-pilot
+WorkingDirectory=/var/lib/cop-pilot/sdk-jobs
+ExecStart=/usr/bin/python3 /opt/cop-sdk-pilot/autoregister-service/relay.py /etc/cop-sdk/config.json
+Restart=always
+RestartSec=10
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/cop-pilot
+LimitNOFILE=4096
+MemoryMax=768M
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

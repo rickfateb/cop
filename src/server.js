@@ -9,6 +9,7 @@ import { createGatewayIngest } from './gateway.js';
 import { startFraudAutomation, verifySignedMedia } from './fraud.js';
 import { createInvestigation, listInvestigations, investigationDetail } from './investigations.js';
 import { startInvestigationWorker } from './investigation-worker.js';
+import { createSdkApi, validatePlaybackConfig } from './sdk-connector.js';
 import { accessModes, defaults, integer, models, nonEmpty, optional, validatePolicy } from './validation.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -188,12 +189,12 @@ async function events(res, url) {
 async function investigationsApi(req,res,url) {
   if(req.method==='GET'){
     const rows=await listInvestigations(pool,{limit:url.searchParams.get('limit'),unitId:url.searchParams.get('unit_id')});
-    return json(res,200,{investigations:rows,connector:{status:'not_available',note:'Estrutura pronta. A recuperação histórica do DVR será ativada quando o conector remoto Intelbras for homologado.'}});
+    return json(res,200,{investigations:rows,connector:{status:process.env.COP_SDK_CONNECTOR_TOKEN?'configured':'not_available',note:'A recuperação depende do conector e da conexão de cada DVR.'}});
   }
   if(req.method==='POST'){
-    const body=await readJson(req);
-    const created=await createInvestigation(pool,body,'admin');
-    return json(res,201,{investigation:created,connector:{status:'not_available'}});
+    const input=await body(req);
+    const created=await createInvestigation(pool,input,'admin');
+    return json(res,201,{investigation:created});
   }
   return json(res,405,{error:'Método não permitido.'});
 }
@@ -244,6 +245,7 @@ async function media(res, mediaId) {
   res.end(row.data);
 }
 
+const sdkApi=createSdkApi({pool,json,readJson:body});
 async function route(req, res) {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/health' && req.method === 'GET') return json(res, 200, {
@@ -256,7 +258,7 @@ async function route(req, res) {
     const contents = await readFile(path.join(root, 'public', entry[0]));
     res.writeHead(200, {
       'Content-Type': `${entry[1]}; charset=utf-8`, 'Cache-Control': 'no-store',
-      'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+      'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
       'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer'
     });
     return res.end(contents);
@@ -268,7 +270,17 @@ async function route(req, res) {
   }
   const externalMatch = url.pathname.match(/^\/api\/ingest\/external\/([A-Za-z0-9_-]{6,64})$/);
   if (externalMatch && req.method === 'POST') return gatewayIngest(req, res, externalMatch[1], json);
+  if(url.pathname.startsWith('/api/sdk/'))return sdkApi(req,res,url);
   if (!sameToken(req.headers.authorization?.replace(/^Bearer /, ''))) return json(res, 401, { error: 'Acesso não autorizado.' });
+  const playbackMatch=url.pathname.match(/^\/api\/dvrs\/([1-9]\d*)\/playback$/);
+  if(playbackMatch&&req.method==='PUT'){
+    const settings=validatePlaybackConfig(await body(req));
+    const saved=await pool.query(`UPDATE cop_dvrs SET playback_mode=$2,autoregister_id=$3,sdk_connector_name=$4,
+      sdk_online=FALSE,updated_at=now() WHERE id=$1 RETURNING id,playback_mode,autoregister_id,sdk_connector_name`,
+      [playbackMatch[1],settings.mode,settings.register,settings.name]);
+    if(!saved.rowCount)return json(res,404,{error:'DVR não encontrado.'});
+    return json(res,200,saved.rows[0]);
+  }
   if (url.pathname === '/api/config' && req.method === 'GET') return config(res);
   if (url.pathname === '/api/events' && req.method === 'GET') return events(res, url);
   if (url.pathname === '/api/fraud/summaries' && req.method === 'GET') return fraudSummaries(res, url);

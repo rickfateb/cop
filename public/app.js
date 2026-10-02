@@ -46,8 +46,8 @@ async function loadInvestigations() {
 function investigationForm() {
   const units=state.data?.units||[];
   const unit=units.find(u=>u.id===state.unitId)||units[0];
-  const dvr=unit?.dvrs?.[0];
-  const cameras=dvr?.cameras||[];
+  const dvr=state.data?.dvrs?.find(d=>d.unit_id===unit?.id&&d.active);
+  const cameras=(state.data?.cameras||[]).filter(c=>c.dvr_id===dvr?.id&&c.active);
   const local=new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
   return `<form id="investigation-form" class="investigation-form">
     <div class="field"><label>Unidade</label><select name="unit_id">${units.map(u=>`<option value="${u.id}" ${u.id===unit?.id?'selected':''}>${escapeHtml(u.name)}</option>`).join('')}</select></div>
@@ -56,7 +56,7 @@ function investigationForm() {
     <div class="field"><label>Minutos depois</label><input name="after" type="number" min="0" max="60" value="10"></div>
     <div class="field wide"><label>Motivo da investigação</label><textarea name="reason" maxlength="2000" placeholder="Ex.: pagamento não localizado; revisão operacional; divergência de estoque." required></textarea></div>
     <div class="field wide"><label>Canais</label><div id="investigation-channels" class="channel-checks">${cameras.map(cam=>`<label><input type="checkbox" name="channels" value="${cam.channel}" checked> Canal ${cam.channel} · ${escapeHtml(cam.name)}</label>`).join('')||'<span class="muted">Nenhuma câmera cadastrada.</span>'}</div></div>
-    <div class="wide investigation-note">O COP registrará a janela de busca agora. A recuperação do HD ficará como <b>aguardando conector Intelbras</b> até homologarmos o acesso histórico remoto.</div>
+    <div class="wide investigation-note">Os canais selecionados serão recuperados quando o DVR e seu conector estiverem disponíveis. Os vídeos aparecerão nesta investigação.</div>
     <div class="wide"><button class="primary" type="submit">Criar investigação</button></div>
   </form>`;
 }
@@ -67,8 +67,9 @@ function renderInvestigations() {
   <div class="investigation-list">${rows.length?rows.map(row=>`<article class="summary-card">
     <div class="summary-head"><div><strong>${escapeHtml(row.unit_name)} · ${dateTime(row.reference_at)}</strong><small>${escapeHtml(row.reason)}</small></div><span class="status-badge">${escapeHtml(row.status)}</span></div>
     <div class="summary-meta"><span>Janela: -${Math.round(row.window_before_seconds/60)} min / +${Math.round(row.window_after_seconds/60)} min</span><span>Fonte: ${escapeHtml(row.source)}</span><span>Conector: ${escapeHtml(row.connector_status)}</span></div>
-    <div class="channel-checks compact">${(row.channels||[]).map(ch=>`<span>Canal ${ch.channel} · ${escapeHtml(ch.camera_name||'Câmera')} · ${escapeHtml(ch.status)}</span>`).join('')}</div>
+    <div class="channel-checks compact">${(row.channels||[]).map(ch=>`<span>Canal ${ch.channel} · ${escapeHtml(ch.camera_name||'Câmera')} · ${escapeHtml(ch.status)}${ch.last_error?' · '+escapeHtml(ch.last_error):''}${ch.retrieved_media_id?` <button class="ghost" data-investigation-video="${ch.retrieved_media_id}">Assistir</button>`:''}</span>`).join('')}</div>
   </article>`).join(''):'<div class="empty"><strong>Nenhuma investigação criada.</strong>Use o formulário acima para registrar uma busca retroativa.</div>'}</div>`;
+  for(const button of document.querySelectorAll('[data-investigation-video]'))button.addEventListener('click',async()=>{try{const response=await fetch(`/api/media/${button.dataset.investigationVideo}`,{headers:{Authorization:`Bearer ${state.token}`}});if(!response.ok)throw Error('Não foi possível carregar o vídeo.');const url=URL.createObjectURL(await response.blob());state.objectUrls.push(url);const video=document.createElement('video');video.controls=true;video.src=url;video.style.maxWidth='100%';button.replaceWith(video);}catch(e){toast(e.message,true);}});
   $('#refresh-investigations')?.addEventListener('click',()=>loadInvestigations().catch(e=>toast(e.message,true)));
   $('#investigation-form')?.addEventListener('submit',submitInvestigation);
   $('#investigation-form select[name="unit_id"]')?.addEventListener('change',()=>{state.unitId=Number($('#investigation-form select[name="unit_id"]').value);renderInvestigations();});
@@ -82,11 +83,11 @@ async function submitInvestigation(event) {
   const d=new Date(local);
   if(Number.isNaN(d.getTime()))return toast('Informe data e horário válidos.',true);
   try{
-    await api('investigations',{method:'POST',body:JSON.stringify({
+    await api('investigations','POST',{
       unit_id:Number(fd.get('unit_id')),reference_at:d.toISOString(),
       window_before_seconds:Number(fd.get('before'))*60,window_after_seconds:Number(fd.get('after'))*60,
       reason:String(fd.get('reason')||''),source:'manual',channels
-    })});
+    });
     toast('Investigação registrada.');
     await loadInvestigations();
   }catch(e){toast(e.message,true);}
@@ -162,7 +163,7 @@ function render() {
   $('#overview').innerHTML = `<div class="section-head"><div><div class="eyebrow">UNIDADE SELECIONADA</div><h2>${escapeHtml(unit.name)}</h2><p>${escapeHtml(unit.city || 'Localidade não informada')} · ${escapeHtml(unit.code)}</p></div><div class="tools"><button class="ghost" data-edit="unit:${unit.id}">Editar</button><button class="primary" data-add="dvr">+ Adicionar DVR</button></div></div><div class="meta"><span>Status <b>${unit.active ? 'Ativa' : 'Inativa'}</b></span><span>Gravadores <b>${selected.length}</b></span><span>Câmeras configuradas <b>${cameras.filter(c => selected.some(d => d.id === c.dvr_id)).length}</b></span></div>`;
   $('#dvr-list').innerHTML = selected.length ? selected.map(d => {
     const cams = cameras.filter(c => c.dvr_id === d.id);
-    return `<article class="dvr panel"><div class="section-head"><div class="dvr-title"><span class="device-icon">▣</span><div><h3>${escapeHtml(d.name)} <span class="badge ${d.active ? '' : 'off'}">${d.active ? 'Ativo' : 'Inativo'}</span></h3><p>${escapeHtml(d.model)} · ${d.channel_count} canais · ${escapeHtml(accessLabel(d.access_mode))}${d.remote_connection_mode ? ' · acesso remoto ' + escapeHtml(d.remote_connection_mode === 'cloud' ? 'Cloud' : d.remote_connection_mode) : ''}${d.cloud_serial ? ' · Serial ' + escapeHtml(d.cloud_serial) : ''}</p></div></div><div class="tools"><button class="ghost" data-edit="dvr:${d.id}">Configurar</button><button class="ghost" data-add="camera:${d.id}">+ Câmera</button></div></div><div class="dvr-ingest"><span>Local SFTP <code>${escapeHtml(d.ingest_key || '—')}</code></span><span>Último arquivo <b>${dateTime(d.last_ingest_at)}</b></span></div><div class="camera-grid">${cams.map(c => `<div class="camera" role="button" tabindex="0" data-edit="camera:${c.id}"><span class="lens">◉</span><div><b>${escapeHtml(c.name)}</b><small>Canal ${c.channel} · ${escapeHtml(c.area || 'Área não definida')}</small><em class="${c.active && c.policy.enabled ? '' : 'muted'}">${c.active && c.policy.enabled ? `${c.policy.offsets.length} marco(s) · ${c.policy.analysis_mode === 'manual' ? 'IA manual' : c.policy.analysis_mode === 'off' ? 'sem IA' : 'IA agendada'}` : 'Captura desligada'}${c.device_config_status ? ` · DVR ${c.device_config_status === 'confirmed' ? 'confirmado' : c.device_config_status === 'pending' ? 'pendente' : c.device_config_status}` : ''}</em></div></div>`).join('')}</div>${cams.length ? '' : '<div class="empty">Nenhuma câmera cadastrada neste DVR.</div>'}</article>`;
+    return `<article class="dvr panel"><div class="section-head"><div class="dvr-title"><span class="device-icon">▣</span><div><h3>${escapeHtml(d.name)} <span class="badge ${d.active ? '' : 'off'}">${d.active ? 'Ativo' : 'Inativo'}</span></h3><p>${escapeHtml(d.model)} · ${d.channel_count} canais · ${escapeHtml(accessLabel(d.access_mode))}${d.remote_connection_mode ? ' · acesso remoto ' + escapeHtml(d.remote_connection_mode === 'cloud' ? 'Cloud' : d.remote_connection_mode) : ''}${d.cloud_serial ? ' · Serial ' + escapeHtml(d.cloud_serial) : ''}</p></div></div><div class="tools"><button class="ghost" data-edit="dvr:${d.id}">Configurar</button><button class="ghost" data-add="camera:${d.id}">+ Câmera</button></div></div><div class="dvr-ingest"><span>Local SFTP <code>${escapeHtml(d.ingest_key || '—')}</code></span><span>Último arquivo <b>${dateTime(d.last_ingest_at)}</b></span>${d.playback_mode==='netsdk_autoregister'?`<span>Gravações: <b>${d.sdk_online&&d.sdk_last_seen_at&&Date.now()-new Date(d.sdk_last_seen_at).getTime()<90000?'DVR conectado':'aguardando conexão'}</b> · ID ${escapeHtml(d.autoregister_id)}</span>`:''}</div><div class="camera-grid">${cams.map(c => `<div class="camera" role="button" tabindex="0" data-edit="camera:${c.id}"><span class="lens">◉</span><div><b>${escapeHtml(c.name)}</b><small>Canal ${c.channel} · ${escapeHtml(c.area || 'Área não definida')}</small><em class="${c.active && c.policy.enabled ? '' : 'muted'}">${c.active && c.policy.enabled ? `${c.policy.offsets.length} marco(s) · ${c.policy.analysis_mode === 'manual' ? 'IA manual' : c.policy.analysis_mode === 'off' ? 'sem IA' : 'IA agendada'}` : 'Captura desligada'}${c.device_config_status ? ` · DVR ${c.device_config_status === 'confirmed' ? 'confirmado' : c.device_config_status === 'pending' ? 'pendente' : c.device_config_status}` : ''}</em></div></div>`).join('')}</div>${cams.length ? '' : '<div class="empty">Nenhuma câmera cadastrada neste DVR.</div>'}</article>`;
   }).join('') : '<div class="panel empty"><strong>Sem DVR nesta unidade</strong>Adicione o gravador para configurar os canais.</div>';
   renderRecent(recent.filter(m => m.unit_id === unit.id));
   setView(state.view);
@@ -194,6 +195,7 @@ function edit(type, row = null, parentId = null) {
   if (type === 'dvr') {
     const server = ingest?.host && ingest?.port ? `${ingest.host}:${ingest.port}` : 'será exibido após ativar o TCP Proxy';
     form.innerHTML = `${select('unit_id','Unidade',row?.unit_id ?? state.unitId,units.map(u => [u.id,u.name]))}${field('name','Identificação do DVR',row?.name,'text','required')}${select('model','Modelo',row?.model ?? 'MHDX 1104',['MHDX 1104','MHDX 1108','MHDX 3108','MHDX 3116','Outro'].map(x => [x,x]))}${field('cloud_serial','Número de série (Intelbras Cloud)',row?.cloud_serial,'text','placeholder="Serial exibido no aplicativo Intelbras" maxlength="80"')}${select('remote_connection_mode','Método de acesso remoto',row?.remote_connection_mode ?? 'cloud',[['cloud','Cloud'],['domain','Domínio'],['ip','Endereço IP'],['ip_extra','IP Extra']])}${field('access_username','Usuário do DVR / Cloud',row?.access_username,'text','placeholder="admin" maxlength="120"')}${select('access_mode','Integração principal',row?.access_mode ?? 'sftp_push',[['sftp_push','SFTP — DVR envia ao COP (recomendado)'],['ftp_push','FTP — DVR envia ao gateway'],['direct_http','HTTP/RTSP — acesso direto ao DVR'],['intelbras_cloud','Intelbras Cloud/P2P — em homologação']])}${row?.ingest_key ? field('ingest_key','Diretório Local no DVR',row.ingest_key,'text','readonly') : '<div class="note">O diretório de ingestão será gerado automaticamente ao salvar o DVR.</div>'}<div class="note"><b>Configuração SFTP no DVR:</b><br>Servidor: ${escapeHtml(server)}<br>Usuário: ${escapeHtml(ingest?.username || 'cop_ingest')}<br>Local: ${escapeHtml(row?.ingest_key || 'gerado após salvar')}<br>Em cada canal desejado, habilite <b>Foto + DM</b>. Começaremos somente com fotos.</div><div class="row">${field('channel_count','Quantidade de canais',row?.channel_count ?? 4,'number','min="1" max="32" required')}${field('service_port','Porta Intelbras',row?.service_port ?? 37777,'number','min="1" max="65535" required')}</div><div class="row">${field('http_port','Porta HTTP',row?.http_port ?? 80,'number','min="1" max="65535" required')}${field('rtsp_port','Porta RTSP',row?.rtsp_port ?? 554,'number','min="1" max="65535" required')}</div>${field('host','IP/DDNS do DVR (opcional)',row?.host,'text','placeholder="Somente para acesso direto/VPN"')}${field('connector_id','Identificador complementar (opcional)',row?.connector_id)}${field('secret_ref','Variável segura da senha do DVR',row?.secret_ref,'text','placeholder="COP_DVR_CEREJEIRAS_PASSWORD"')}${checked('active','DVR ativo',row?.active ?? true)}`;
+    form.innerHTML += `${select('playback_mode','Recuperação de gravações',row?.playback_mode ?? 'unavailable',[['unavailable','Não configurada'],['netsdk_autoregister','SDK · Auto Registro'],['rtsp_direct','RTSP direto'],['agent','Agente'],['cloud','Cloud · aguardando conector']])}${field('autoregister_id','ID de Auto Registro no DVR',row?.autoregister_id,'text','placeholder="101 para Cerejeiras" maxlength="128"')}${field('sdk_connector_name','Receptor de gravações',row?.sdk_connector_name ?? 'hostinger','text','maxlength="64"')}<div class="note">Para Auto Registro, o ID deve ser igual ao configurado no gravador e no receptor. A senha fica no VPS.</div>`;
   }
   if (type === 'camera') {
     const dvrId = row?.dvr_id ?? parentId;
@@ -232,6 +234,7 @@ $('#close-editor').addEventListener('click', () => $('#editor').close());
 $('#cancel-editor').addEventListener('click', () => $('#editor').close());
 $('#edit-form').addEventListener('submit', async e => {
   e.preventDefault(); const {type,row} = state.edit; const name = {unit:'units',dvr:'dvrs',camera:'cameras'}[type];
-  try { await api(row ? `${name}/${row.id}` : name, row ? 'PUT' : 'POST', payload(e.currentTarget,type)); $('#editor').close(); await refresh(); toast('Configuração salva.'); }
+  try { const saved=await api(row ? `${name}/${row.id}` : name, row ? 'PUT' : 'POST', payload(e.currentTarget,type)); if(type==='dvr')await api(`dvrs/${saved.id}/playback`,'PUT',{playback_mode:value(e.currentTarget,'playback_mode'),autoregister_id:value(e.currentTarget,'autoregister_id'),sdk_connector_name:value(e.currentTarget,'sdk_connector_name')}); $('#editor').close(); await refresh(); toast('Configuração salva.'); }
   catch(error) { toast(error.message,true); }
 });
+

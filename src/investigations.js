@@ -7,6 +7,7 @@ export async function createInvestigation(pool,body,actor='admin'){
  const referenceAt=iso(body.reference_at,'Data/hora');
  const before=int(body.window_before_seconds??300,'Janela anterior',0,3600);
  const after=int(body.window_after_seconds??600,'Janela posterior',0,3600);
+ if(before+after===0)throw Object.assign(Error('Informe uma janela de busca maior que zero.'),{status:400});
  const reason=txt(body.reason,'Motivo',2000);
  const source=['manual','api','financial','stock','other'].includes(body.source)?body.source:'manual';
  const externalRef=body.external_ref==null?null:String(body.external_ref).slice(0,200);
