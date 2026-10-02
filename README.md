@@ -73,3 +73,12 @@ npm test
 npm run check
 npm start
 ```
+
+
+## Revisão de comportamentos e roupas
+
+Em **Resumos**, a seção de revisão apresenta as próximas análises com ações, canais, horários de gravação disponíveis e evidências. O filtro de roupas mostra candidatos com características de vestuário ou objetos semelhantes à referência, sem associação automática de identidade. Pagamento precisa de conciliação independente.
+
+Em **Investigações**, o botão da ocorrência Cerejeiras prepara 02/10/2026, 19h10–19h16, com os canais ativos cadastrados no DVR da unidade. Confirme o relógio do DVR antes de criar a solicitação; o horário do formulário usa São Paulo. O conector de playback precisa estar conectado para recuperar os vídeos. Preparar a janela não baixa nem solicita gravações.
+
+Alertas definitivos das ocorrências graves dependem de **Confirmar ocorrência para alerta**; **Descartar alerta** impede sua liberação. A confirmação mantém o envio no horário previamente configurado. O resultado de roupa sozinho nunca cria alerta grave. As APIs de revisão usam a autenticação administrativa existente.

@@ -138,6 +138,7 @@ ALTER TABLE cop_analysis_jobs ADD COLUMN IF NOT EXISTS provider_audit_id TEXT;
 ALTER TABLE cop_analysis_jobs ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ;
 ALTER TABLE cop_analysis_jobs ADD COLUMN IF NOT EXISTS result_checked_at TIMESTAMPTZ;
 ALTER TABLE cop_analysis_jobs ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+ALTER TABLE cop_analysis_jobs ADD COLUMN IF NOT EXISTS analysis_result JSONB;
 
 CREATE TABLE IF NOT EXISTS cop_fraud_incidents (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -159,6 +160,10 @@ CREATE TABLE IF NOT EXISTS cop_fraud_incidents (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE cop_fraud_incidents ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'pending'
+ CHECK (review_status IN ('pending','confirmed','dismissed'));
+ALTER TABLE cop_fraud_incidents ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS cop_fraud_evidence (
   incident_id BIGINT NOT NULL REFERENCES cop_fraud_incidents(id) ON DELETE CASCADE,

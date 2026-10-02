@@ -12,6 +12,7 @@ import { createGatewayIngest } from './gateway.js';
 import { startFraudAutomation, verifySignedMedia } from './fraud.js';
 import { createInvestigation, listInvestigations, investigationDetail } from './investigations.js';
 import { startInvestigationWorker } from './investigation-worker.js';
+import {listReviews,reviewIncident} from './review.js';
 import { createSdkApi, validatePlaybackConfig } from './sdk-connector.js';
 import { accessModes, defaults, integer, models, nonEmpty, optional, validatePolicy } from './validation.js';
 
@@ -214,7 +215,7 @@ async function fraudSummaries(res, url) {
   const unitId = url.searchParams.get('unit_id');
   const params = [];
   const where = [];
-  if (unitId) { params.push(id(unitId)); where.push(`i.unit_id=${params.length}`); }
+  if (unitId) { params.push(id(unitId)); where.push(`i.unit_id=$${params.length}`); }
   params.push(limit);
   const incidents = (await pool.query(`
     SELECT i.*,u.name AS unit_name,u.code AS unit_code,d.name AS dvr_name,c.name AS camera_name
@@ -223,7 +224,7 @@ async function fraudSummaries(res, url) {
     JOIN cop_dvrs d ON d.id=i.dvr_id
     LEFT JOIN cop_cameras c ON c.id=i.camera_id
     ${where.length ? 'WHERE '+where.join(' AND ') : ''}
-    ORDER BY i.occurred_at DESC,i.id DESC LIMIT ${params.length}`, params)).rows;
+    ORDER BY i.occurred_at DESC,i.id DESC LIMIT $${params.length}`, params)).rows;
   if (!incidents.length) return json(res,200,{incidents:[]});
   const ids = incidents.map(row => row.id);
   const evidence = (await pool.query(`
@@ -309,6 +310,9 @@ async function route(req, res) {
   if (url.pathname === '/api/config' && req.method === 'GET') return config(res);
   if (url.pathname === '/api/events' && req.method === 'GET') return events(res, url);
   if (url.pathname === '/api/fraud/summaries' && req.method === 'GET') return fraudSummaries(res, url);
+  if (url.pathname === '/api/fraud/reviews' && req.method === 'GET') return json(res,200,{reviews:await listReviews(pool,{limit:url.searchParams.get('limit'),unitId:url.searchParams.get('unit_id'),clothingOnly:url.searchParams.get('clothing')==='1'})});
+  const reviewMatch=url.pathname.match(/^\/api\/fraud\/incidents\/([1-9]\d*)\/review$/);
+  if(reviewMatch && req.method==='POST')return json(res,200,await reviewIncident(pool,reviewMatch[1],(await body(req)).status));
   if (url.pathname === '/api/investigations') return investigationsApi(req,res,url);
   const investigationMatch=url.pathname.match(/^\/api\/investigations\/([1-9]\d*)$/);
   if(investigationMatch&&req.method==='GET') return investigationById(res,investigationMatch[1]);

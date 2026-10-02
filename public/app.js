@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-const state = { user: null, data: null, unitId: null, edit: null, objectUrls: [], view: 'config', summaries: null, investigations: null };
+const state = { user: null, data: null, unitId: null, edit: null, objectUrls: [], view: 'config', summaries: null, investigations: null, reviews: [], clothingOnly: false };
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]);
 const toast = (message, error = false) => { const el = $('#toast'); el.textContent = message; el.className = `show${error ? ' error' : ''}`; clearTimeout(toast.timer); toast.timer = setTimeout(() => el.className = '', 4000); };
 const accessLabel = mode => ({ sftp_push:'SFTP · DVR envia', ftp_push:'FTP · gateway', direct_http:'HTTP/RTSP direto', intelbras_cloud:'Intelbras Cloud · homologação', agent:'Agente legado', vpn:'VPN legada' }[mode] || mode);
@@ -56,7 +56,7 @@ function investigationForm() {
   const local=new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
   return `<form id="investigation-form" class="investigation-form">
     <div class="field"><label>Unidade</label><select name="unit_id">${units.map(u=>`<option value="${u.id}" ${u.id===unit?.id?'selected':''}>${escapeHtml(u.name)}</option>`).join('')}</select></div>
-    <div class="field"><label>Data e horário de referência</label><input name="reference_at" type="datetime-local" value="${local}" required></div>
+    <div class="field"><label>Data e horário do DVR (São Paulo)</label><input name="reference_at" type="datetime-local" value="${local}" required></div>
     <div class="field"><label>Minutos antes</label><input name="before" type="number" min="0" max="60" value="5"></div>
     <div class="field"><label>Minutos depois</label><input name="after" type="number" min="0" max="60" value="10"></div>
     <div class="field wide"><label>Motivo da investigação</label><textarea name="reason" maxlength="2000" placeholder="Ex.: pagamento não localizado; revisão operacional; divergência de estoque." required></textarea></div>
@@ -67,7 +67,7 @@ function investigationForm() {
 }
 function renderInvestigations() {
   const rows=state.investigations?.investigations||[];
-  $('#investigations-view').innerHTML=`<div class="section-head"><div><div class="eyebrow">INVESTIGAÇÕES</div><h2>Investigação retroativa</h2><p>Solicite uma janela histórica do DVR e múltiplos canais para reconstrução posterior.</p></div><button class="ghost" id="refresh-investigations">Atualizar</button></div>
+  $('#investigations-view').innerHTML=`<div class="section-head"><div><div class="eyebrow">INVESTIGAÇÕES</div><h2>Investigação retroativa</h2><p>Solicite uma janela histórica do DVR e múltiplos canais para reconstrução posterior.</p><button class="ghost" id="prepare-cerejeiras">Preparar ocorrência Cerejeiras · 02/10 · 19h10–19h16</button></div><button class="ghost" id="refresh-investigations">Atualizar</button></div>
   ${investigationForm()}
   <div class="investigation-list">${rows.length?rows.map(row=>`<article class="summary-card">
     <div class="summary-head"><div><strong>${escapeHtml(row.unit_name)} · ${dateTime(row.reference_at)}</strong><small>${escapeHtml(row.reason)}</small></div><span class="status-badge">${escapeHtml(row.status)}</span></div>
@@ -77,6 +77,14 @@ function renderInvestigations() {
   for(const button of document.querySelectorAll('[data-investigation-video]'))button.addEventListener('click',async()=>{try{const response=await fetch(`/api/media/${button.dataset.investigationVideo}`,{credentials:'same-origin'});if(!response.ok)throw Error('Não foi possível carregar o vídeo.');const url=URL.createObjectURL(await response.blob());state.objectUrls.push(url);const video=document.createElement('video');video.controls=true;video.src=url;video.style.maxWidth='100%';button.replaceWith(video);}catch(e){toast(e.message,true);}});
   $('#refresh-investigations')?.addEventListener('click',()=>loadInvestigations().catch(e=>toast(e.message,true)));
   $('#investigation-form')?.addEventListener('submit',submitInvestigation);
+  $('#prepare-cerejeiras')?.addEventListener('click',()=>{
+    const unit=state.data.units.find(u=>u.name.toLowerCase().includes('cerejeiras'));
+    if(!unit)return toast('Cerejeiras não encontrada no cadastro.',true);
+    state.unitId=unit.id;renderInvestigations();
+    const form=$('#investigation-form');form.elements.reference_at.value='2026-10-02T19:13';form.elements.before.value=3;form.elements.after.value=3;
+    form.elements.reason.value='Revisão da ocorrência Cerejeiras: retirada de latas e embalagens, colocação em sacola e saída. Pagamento não verificável pelas imagens; conferir vendas e sincronização do relógio do DVR. Recuperar todos os canais cadastrados para contexto e revisão humana.';
+    toast('Janela preparada; confira o relógio do DVR e crie a investigação.');
+  });
   $('#investigation-form select[name="unit_id"]')?.addEventListener('change',()=>{state.unitId=Number($('#investigation-form select[name="unit_id"]').value);renderInvestigations();});
 }
 async function submitInvestigation(event) {
@@ -85,7 +93,7 @@ async function submitInvestigation(event) {
   const channels=[...form.querySelectorAll('input[name="channels"]:checked')].map(el=>Number(el.value));
   if(!channels.length)return toast('Selecione pelo menos um canal.',true);
   const local=String(fd.get('reference_at')||'');
-  const d=new Date(local);
+  const d=new Date(local+':00-03:00');
   if(Number.isNaN(d.getTime()))return toast('Informe data e horário válidos.',true);
   try{
     await api('investigations','POST',{
@@ -98,7 +106,8 @@ async function submitInvestigation(event) {
   }catch(e){toast(e.message,true);}
 }
 async function loadSummaries() {
-  state.summaries = await api('fraud/summaries?limit=100');
+  const [summaries,reviews]=await Promise.all([api('fraud/summaries?limit=100'),api('fraud/reviews?limit=100'+(state.clothingOnly?'&clothing=1':''))]);
+  state.summaries=summaries;state.reviews=reviews.reviews;
   renderSummaries();
 }
 function renderSummaries() {
@@ -109,7 +118,7 @@ function renderSummaries() {
     if (!byUnit.has(key)) byUnit.set(key, []);
     byUnit.get(key).push(row);
   }
-  $('#summaries-view').innerHTML = `<div class="section-head"><div><div class="eyebrow">RESUMOS</div><h2>Ocorrências para conferência humana</h2><p>Eventos classificados automaticamente como Grave - Fraude.</p></div><button class="ghost" id="refresh-summaries">Atualizar</button></div>${rows.length ? [...byUnit.entries()].map(([unit,items]) => `
+  $('#summaries-view').innerHTML = `<div class="section-head"><div><div class="eyebrow">RESUMOS</div><h2>Ocorrências para conferência humana</h2><p>Análises automáticas aguardam conferência. Semelhança de roupa não confirma identidade ou falta de pagamento.</p></div><button class="ghost" id="refresh-summaries">Atualizar</button></div>${rows.length ? [...byUnit.entries()].map(([unit,items]) => `
     <section class="summary-unit"><h3>${escapeHtml(unit)}</h3>${items.map(item => `
       <article class="summary-card">
         <div class="summary-head"><div><strong>${new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(item.occurred_at))} · Grave - Fraude</strong><small>${dateTime(item.occurred_at)} · ${escapeHtml(item.camera_name || item.dvr_name || '')}</small></div><span class="fraud-badge">Grave - Fraude</span></div>
@@ -117,10 +126,20 @@ function renderSummaries() {
         <p><b>Motivo da preocupação:</b> ${escapeHtml(item.rationale)}</p>
         <div class="evidence-grid">${(item.evidence||[]).map(ev => `<figure><img data-summary-media="${ev.media_id}" alt="Evidência ${ev.evidence_order}"><figcaption>Quadro ${ev.evidence_order}${ev.frame_offset_seconds != null ? ' · +'+ev.frame_offset_seconds+'s' : ''}</figcaption></figure>`).join('')}</div>
         ${item.video_media_id ? `<div class="review-video"><video controls preload="metadata" data-summary-video="${item.video_media_id}"></video></div>` : ''}
-        <div class="summary-meta"><span>Confiança IA: ${Math.round(Number(item.confidence||0)*100)}%</span><span>WhatsApp 9h: ${escapeHtml(item.alert_status)}</span></div>
+        <div class="summary-meta"><span>Confiança estimada IA: ${Math.round(Number(item.confidence||0)*100)}%</span><span>Revisão: ${escapeHtml(item.review_status||'pending')}</span><span>WhatsApp 9h: ${escapeHtml(item.alert_status)}</span></div>
+        ${item.review_status==='pending'?`<div class="tools"><button class="ghost" data-review-incident="${item.id}" data-review-status="dismissed">Descartar alerta</button><button class="primary" data-review-incident="${item.id}" data-review-status="confirmed">Confirmar ocorrência para alerta</button></div>`:''}
       </article>`).join('')}</section>`).join('') : '<div class="empty"><strong>Nenhuma ocorrência Grave - Fraude.</strong>Os eventos classificados pela IA aparecerão aqui para revisão.</div>'}`;
+  const reviewSection=document.createElement('section');reviewSection.innerHTML=renderBehaviorReviews();$('#summaries-view').appendChild(reviewSection);
+  $('#clothing-only')?.addEventListener('change',e=>{state.clothingOnly=e.target.checked;loadSummaries().catch(e=>toast(e.message,true));});
+  for(const button of document.querySelectorAll('[data-review-incident]'))button.addEventListener('click',async()=>{try{await api('fraud/incidents/'+button.dataset.reviewIncident+'/review','POST',{status:button.dataset.reviewStatus});await loadSummaries();toast('Revisão registrada.');}catch(e){toast(e.message,true);}});
   $('#refresh-summaries')?.addEventListener('click',()=>loadSummaries().then(()=>toast('Resumos atualizados.')).catch(e=>toast(e.message,true)));
   loadSummaryMedia();
+}
+function renderBehaviorReviews() {
+ const fmt=value=>value?new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',dateStyle:'short',timeStyle:'medium'}).format(new Date(value)):'horário não determinado';
+ const rows=state.reviews||[];
+ const evidence=(items,label)=>(items||[]).length?`<h4>${label}</h4><div class="evidence-grid">${items.map(ev=>`<figure><img data-summary-media="${escapeHtml(ev.media_id)}" alt="Quadro para revisão"><figcaption>${escapeHtml(fmt(ev.recorded_at))} · canal ${escapeHtml(ev.channel??'não determinado')} · +${escapeHtml(ev.frame_offset_seconds??'?')}s<br>${escapeHtml(ev.description)}</figcaption></figure>`).join('')}</div>`:'';
+ return `<div class="section-head"><div><h2>Comportamentos e roupas para revisão</h2><p>Referência: Cerejeiras, 02/10/2026. Ações e possíveis semelhanças visuais; pagamento depende de conciliação.</p><label><input id="clothing-only" type="checkbox" ${state.clothingOnly?'checked':''}> Somente candidatos com roupas ou sacolas semelhantes</label></div></div>${rows.length?rows.map(row=>{const r=row.analysis_result;return `<article class="summary-card"><div class="summary-head"><strong>${escapeHtml(row.unit_name)} · ${escapeHtml(fmt(row.started_at))}</strong><span class="status-badge">${escapeHtml(r.classification)}</span></div><p>${escapeHtml(r.summary)}</p><p>${escapeHtml(r.rationale)}</p>${evidence(r.observations,'Ações observadas')}${evidence(r.clothing_matches,'Roupas ou objetos semelhantes — revisar')}<small>Não estabelece que seja a mesma pessoa. Pagamento não verificado nesta análise.</small>${row.video_media_id?`<div class="review-video"><video controls preload="metadata" data-summary-video="${row.video_media_id}"></video></div>`:''}</article>`;}).join(''):'<div class="empty">Nenhuma análise disponível com estes critérios. As próximas análises usarão a referência.</div>'}`;
 }
 async function loadSummaryMedia() {
   for (const el of document.querySelectorAll('[data-summary-media],[data-summary-video]')) {
@@ -280,3 +299,4 @@ async function renderArchive(){
  $('#refresh-archive').addEventListener('click',()=>renderArchive().catch(e=>toast(e.message,true)));
 }
 $('#show-archive').addEventListener('click',()=>{setView('archive');renderArchive().catch(e=>toast(e.message,true));});
+

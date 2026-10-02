@@ -1,5 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { transcodeReviewVideo } from './video.js';
+import {mapReviewResult} from './review.js';
 
 const TZ = 'America/Sao_Paulo';
 
@@ -40,7 +41,7 @@ function addSeconds(value, seconds) { return new Date(new Date(value).getTime() 
 
 async function submitOne(pool, job, logger) {
   const media = (await pool.query(`
-    SELECT id,filename,received_at,frame_offset_seconds
+    SELECT id,filename,received_at,recorded_at,detected_channel,frame_offset_seconds
     FROM cop_media
     WHERE event_id=$1 AND selected_for_ai=TRUE AND content_type='image/jpeg'
     ORDER BY COALESCE(frame_offset_seconds,0),received_at,id`, [job.event_id])).rows;
@@ -62,9 +63,9 @@ async function submitOne(pool, job, logger) {
       external_id: `cop-media-${row.id}`,
       kind: 'photo',
       url: signedMediaUrl(row.id, 48*3600),
-      captured_at: addSeconds(job.started_at, row.frame_offset_seconds),
+      captured_at: row.recorded_at ? toIso(row.recorded_at) : addSeconds(job.started_at, row.frame_offset_seconds),
       camera_id: job.camera_id == null ? null : String(job.camera_id),
-      metadata: { frame_offset_seconds: row.frame_offset_seconds ?? 0, filename: row.filename }
+      metadata: { frame_offset_seconds: row.frame_offset_seconds ?? 0, filename: row.filename,channel:row.detected_channel??null }
     }))
   };
   let response;
@@ -121,6 +122,9 @@ async function ensureReviewVideo(pool, eventId, evidenceRows, logger) {
 async function completeOne(pool, job, detail, logger) {
   const result = detail.fraud_result;
   if (!result) throw Error('Resultado de fraude ausente.');
+  const reviewMedia=(await pool.query('SELECT id,detected_channel,frame_offset_seconds,recorded_at FROM cop_media WHERE event_id=$1',[job.event_id])).rows;
+  const review=mapReviewResult(detail,reviewMedia);
+  await pool.query('UPDATE cop_analysis_jobs SET analysis_result=$2::jsonb,updated_at=now() WHERE id=$1',[job.id,JSON.stringify(review)]);
   if (result.classification !== 'Grave - Fraude') {
     await pool.query("UPDATE cop_analysis_jobs SET status='done',finished_at=now(),last_error=NULL,updated_at=now() WHERE id=$1",[job.id]);
     return;
@@ -137,7 +141,7 @@ async function completeOne(pool, job, detail, logger) {
     VALUES($1,$2,$3,$4,$5,'Grave - Fraude',$6,$7,$8,$9)
     ON CONFLICT(event_id) DO UPDATE SET summary=excluded.summary,rationale=excluded.rationale,confidence=excluded.confidence,video_media_id=COALESCE(excluded.video_media_id,cop_fraud_incidents.video_media_id),updated_at=now()
     RETURNING id`,
-    [job.event_id,job.unit_id,job.dvr_id,job.camera_id,job.started_at,String(result.summary).slice(0,4000),String(result.rationale).slice(0,4000),Number(result.confidence),videoMediaId]);
+    [job.event_id,job.unit_id,job.dvr_id,job.camera_id,job.started_at,review.summary,String(result.rationale).slice(0,4000),Number(result.confidence),videoMediaId]);
   const incidentId = incident.rows[0].id;
   await pool.query('DELETE FROM cop_fraud_evidence WHERE incident_id=$1',[incidentId]);
   for (let i=0;i<evidenceRows.length;i++) await pool.query('INSERT INTO cop_fraud_evidence(incident_id,media_id,evidence_order) VALUES($1,$2,$3)',[incidentId,evidenceRows[i].id,i+1]);
@@ -200,7 +204,7 @@ async function sendNineOClock(pool, logger) {
   const incidents=(await pool.query(`
     SELECT i.*,u.name unit_name
     FROM cop_fraud_incidents i JOIN cop_units u ON u.id=i.unit_id
-    WHERE i.occurred_at < $1 AND i.alert_status IN ('pending','failed') AND i.alert_attempts<6
+    WHERE i.occurred_at < $1 AND i.review_status='confirmed' AND i.alert_status IN ('pending','failed') AND i.alert_attempts<6
       AND (i.last_alert_attempt_at IS NULL OR i.last_alert_attempt_at < now()-interval '10 minutes')
     ORDER BY u.name,i.occurred_at,i.id LIMIT 100`,[clock.cutoff])).rows;
   if (!incidents.length) return;
