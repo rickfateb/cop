@@ -6,10 +6,10 @@ export async function storePlayback(pool,investigation,channel,result){
  const expiresAt=new Date(Date.now()+15*86400000);
  const sourcePath=`investigation/${investigation.id}/channel-${channel.channel}/${result.filename}`;
  const inserted=await pool.query(`
-  INSERT INTO cop_media(event_id,unit_id,dvr_id,camera_id,detected_channel,source,source_path,filename,content_type,bytes,sha256,data,expires_at,selected_for_ai)
-  VALUES(NULL,$1,$2,$3,$4,'investigation',$5,$6,$7,$8,$9,$10,$11,FALSE)
+  INSERT INTO cop_media(event_id,unit_id,dvr_id,camera_id,detected_channel,source,source_path,filename,content_type,bytes,sha256,data,expires_at,selected_for_ai,recorded_at)
+  VALUES(NULL,$1,$2,$3,$4,'investigation',$5,$6,$7,$8,$9,$10,$11,FALSE,$12)
   ON CONFLICT(dvr_id,source_path,sha256) DO NOTHING RETURNING id`,
-  [investigation.unit_id,investigation.dvr_id,channel.camera_id,channel.channel,sourcePath,result.filename,result.contentType,result.data.length,sha,result.data,expiresAt]);
+  [investigation.unit_id,investigation.dvr_id,channel.camera_id,channel.channel,sourcePath,result.filename,result.contentType,result.data.length,sha,result.data,expiresAt,channel.requested_start_at||channel.start]);
  if(inserted.rowCount)return inserted.rows[0].id;
  return (await pool.query('SELECT id FROM cop_media WHERE dvr_id=$1 AND source_path=$2 AND sha256=$3 ORDER BY id DESC LIMIT 1',[investigation.dvr_id,sourcePath,sha])).rows[0]?.id||null;
 }

@@ -1,7 +1,8 @@
+import {startDriveArchive} from './drive-archive.js';
 import http from 'node:http';
 import {createGoogleAuth} from './google-auth.js';
 import { createInfrastructureApi, publicServerSql, publicDvrSql, redactDvr, deviceAssignment, encryptSecret } from './infrastructure.js';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -109,6 +110,7 @@ async function ensureDvrIngestDirectories() {
   console.log(`COP SFTP diretórios preparados: ${created}`);
 }
 await ensureDvrIngestDirectories();
+const driveArchive=startDriveArchive({pool});
 const ingestWorker = startIngestWorker({ pool });
 const gatewayIngest = createGatewayIngest({ pool });
 const fraudAutomation = startFraudAutomation({ pool });
@@ -238,9 +240,14 @@ async function fraudSummaries(res, url) {
 }
 
 async function media(res, mediaId) {
-  const result = await pool.query('SELECT filename,content_type,bytes,data FROM cop_media WHERE id=$1', [id(mediaId)]);
+  const result = await pool.query('SELECT filename,content_type,bytes,data,sha256,drive_file_id,drive_verified_at FROM cop_media WHERE id=$1', [id(mediaId)]);
   if (!result.rowCount) return json(res, 404, { error: 'Mídia não encontrada.' });
   const row = result.rows[0];
+  if(!row.data){
+    if(!row.drive_verified_at||!row.drive_file_id)return json(res,503,{error:'Arquivo aguardando arquivamento.'});
+    try{row.data=await driveArchive.drive.download(row.drive_file_id);if(createHash('sha256').update(row.data).digest('hex')!==row.sha256)throw Error('checksum');}
+    catch{return json(res,503,{error:'Arquivo no Drive temporariamente indisponível.'});}
+  }
   const safeName = String(row.filename || 'media').replace(/["\r\n]/g, '_');
   res.writeHead(200, {
     'Content-Type': row.content_type || 'application/octet-stream', 'Content-Length': row.data.length,
@@ -283,6 +290,10 @@ async function route(req, res) {
     if(!user)return json(res,401,{error:'Entre com Google para acessar o COP.'});
     if(!['GET','HEAD'].includes(req.method))googleAuth.ensureOrigin(req);
     req.copUser=user;
+  }
+  if(url.pathname==='/api/archive/status'&&req.method==='GET'){
+    const counts=(await pool.query("SELECT count(*) FILTER(WHERE drive_verified_at IS NOT NULL)::int archived,count(*) FILTER(WHERE data IS NOT NULL AND drive_verified_at IS NULL)::int pending,count(*) FILTER(WHERE drive_error IS NOT NULL)::int errors,count(*) FILTER(WHERE data IS NULL)::int local_released FROM cop_media")).rows[0];
+    return json(res,200,{...driveArchive.state,...counts,root_url:process.env.COP_DRIVE_ROOT_ID?'https://drive.google.com/drive/folders/'+process.env.COP_DRIVE_ROOT_ID:null});
   }
   if(/^\/api\/(servers|server-directories)(\/|$)/.test(url.pathname)||/^\/api\/dvrs\/[1-9]\d*\/credentials$/.test(url.pathname))return infrastructureApi(req,res,url);
   const playbackMatch=url.pathname.match(/^\/api\/dvrs\/([1-9]\d*)\/playback$/);
@@ -363,6 +374,6 @@ const server = http.createServer((req,res) => route(req,res).catch(error => {
 }));
 server.listen(Number(process.env.PORT || 3000), '0.0.0.0', () => { const sftp=publicIngest(); console.log('COP pronto.'); console.log(`COP SFTP: ${sftp.host || 'sem-host'}:${sftp.port || 'sem-port'} -> ${sftp.internal_port}`); });
 for (const signal of ['SIGTERM','SIGINT']) process.on(signal, () => {
-  ingestWorker.stop(); fraudAutomation.stop(); investigationWorker.stop();
+  driveArchive.stop(); ingestWorker.stop(); fraudAutomation.stop(); investigationWorker.stop();
   server.close(() => pool.end().then(() => process.exit(0)));
 });

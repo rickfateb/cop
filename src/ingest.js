@@ -1,3 +1,4 @@
+import { recordingTime } from './drive-archive.js';
 import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
@@ -105,7 +106,7 @@ export function startIngestWorker({ pool, root = process.env.COP_INGEST_ROOT || 
     const channel = detectChannel(relative);
     let cameraId = null;
     let cameraPolicy = null;
-    let retentionDays = 7;
+    let retentionDays = 15;
     if (channel) {
       const camera = await pool.query('SELECT id, policy, device_config FROM cop_cameras WHERE dvr_id=$1 AND channel=$2 AND active=TRUE', [dvr.id, channel]);
       if (camera.rowCount) {
@@ -113,7 +114,7 @@ export function startIngestWorker({ pool, root = process.env.COP_INGEST_ROOT || 
         cameraPolicy = camera.rows[0].policy || null;
         cameraPolicy.device_config = camera.rows[0].device_config || {};
         const retention = Number(cameraPolicy?.retention_days);
-        if (Number.isInteger(retention) && retention >= 1 && retention <= 365) retentionDays = retention;
+        if (Number.isInteger(retention) && retention >= 1 && retention <= 365) retentionDays = 15;
       }
     }
     const source = dvr.access_mode === 'ftp_push' ? 'ftp' : 'sftp';
@@ -127,6 +128,7 @@ export function startIngestWorker({ pool, root = process.env.COP_INGEST_ROOT || 
       [eventId, dvr.unit_id, dvr.id, cameraId, channel, streamKey, source, relative, path.basename(file), contentTypeFor(file), payload.length, sha256, payload, expiresAt]);
 
     if (inserted.rowCount) {
+      await pool.query('UPDATE cop_media SET recorded_at=$2 WHERE id=$1', [inserted.rows[0].id, recordingTime(relative)]);
       let insertedMediaCount = 1;
       if (cameraId && isExtractableVideo(file)) {
         const sample = samplingConfig(cameraPolicy?.device_config || {});
@@ -141,6 +143,7 @@ export function startIngestWorker({ pool, root = process.env.COP_INGEST_ROOT || 
             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'image/jpeg',$10,$11,$12,$13,TRUE,$14)
             ON CONFLICT (dvr_id,source_path,sha256) DO NOTHING RETURNING id`,
             [eventId, dvr.unit_id, dvr.id, cameraId, channel, streamKey, source, frameSourcePath, frameFilename, frame.data.length, frameSha, frame.data, expiresAt, frame.offset]);
+          if(frameInsert.rowCount)await pool.query('UPDATE cop_media SET recorded_at=$2 WHERE id=$1',[frameInsert.rows[0].id,recordingTime(relative)?new Date(+recordingTime(relative)+frame.offset*1000):null]);
           insertedMediaCount += frameInsert.rowCount;
         }
         logger.log(`COP frames IA: arquivo=${path.basename(file)} canal=${channel || 'n/a'} extraidos=${frames.length}`);
@@ -169,7 +172,7 @@ export function startIngestWorker({ pool, root = process.env.COP_INGEST_ROOT || 
         AND c.policy->>'analysis_mode' IN ('always','duration')
         AND EXISTS (SELECT 1 FROM cop_media m WHERE m.event_id=e.id AND m.selected_for_ai=TRUE)
       ON CONFLICT(event_id) DO NOTHING`);
-    await pool.query('DELETE FROM cop_media WHERE expires_at < now()');
+    // Local payload release is owned by the Drive worker after remote verification.
   };
 
   const scan = async () => {
@@ -222,3 +225,4 @@ function relativeSafe(root, file) {
   const value = path.relative(root, file);
   return value.startsWith('..') ? path.basename(file) : value;
 }
+

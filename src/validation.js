@@ -7,7 +7,7 @@ export const defaults = Object.freeze({
   min_motion_seconds: 0,
   analysis_mode: 'manual',
   analysis_after_seconds: 20,
-  retention_days: 7
+  retention_days: 15
 });
 export function validatePolicy(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('Política inválida.');
@@ -21,6 +21,7 @@ export function validatePolicy(value) {
     if (!Number.isInteger(p[key]) || p[key] < (key === 'retention_days' ? 1 : 0) || p[key] > max) throw Error(`Valor inválido: ${key}.`);
   }
   if (!['manual', 'always', 'duration', 'off'].includes(p.analysis_mode)) throw Error('Modo de análise inválido.');
+  p.retention_days = 15;
   return Object.fromEntries(Object.keys(defaults).map(key => [key, p[key]]));
 }
 export function nonEmpty(value, label, max = 120) {
@@ -36,3 +37,4 @@ export function integer(value, label, min, max) {
   if (!Number.isInteger(value) || value < min || value > max) throw Error(`${label}: use um número entre ${min} e ${max}.`);
   return value;
 }
+
