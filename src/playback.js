@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import { decryptSecret } from './infrastructure.js';
 
 function intelbrasTime(value) {
   const d=new Date(value);
@@ -37,11 +38,11 @@ export function buildPlaybackUrl({host,port=554,channel,start,end}) {
 
 export async function retrieveIntelbrasRtsp({dvr,channel,start,end,logger=console,maxBytes=256*1024*1024}) {
  if(dvr.playback_mode!=='rtsp_direct')return {status:'waiting_connector',reason:'Playback direto não configurado para este DVR.'};
- const host=safeHost(dvr.playback_host),port=Number(dvr.playback_rtsp_port||554);
+ const host=safeHost(dvr.playback_host||dvr.host),port=Number(dvr.playback_rtsp_port||dvr.rtsp_port||554);
  if(!Number.isInteger(port)||port<1||port>65535)throw Error('Porta RTSP inválida.');
  if(!(await tcpReachable(host,port)))return {status:'waiting_connector',reason:`Endpoint RTSP ${host}:${port} não alcançável pelo COP.`};
  const username=String(dvr.playback_username||dvr.access_username||'');
- const password=secretFromRef(dvr.playback_password_ref||dvr.secret_ref);
+ const password=dvr.access_password_cipher?decryptSecret(dvr.access_password_cipher):secretFromRef(dvr.playback_password_ref||dvr.secret_ref);
  if(!username||!password)throw Error('Credenciais de playback não configuradas.');
  const url=buildPlaybackUrl({host,port,channel,start,end});
  const dir=await mkdtemp(path.join(tmpdir(),'cop-playback-')),output=path.join(dir,`channel-${channel}.mp4`);
@@ -62,3 +63,4 @@ export async function retrieveIntelbrasRtsp({dvr,channel,start,end,logger=consol
   return {status:'ready',data,contentType:'video/mp4',filename:`investigacao-dvr${dvr.id}-ch${channel}-${intelbrasTime(start)}-${intelbrasTime(end)}.mp4`,url};
  }finally{await rm(dir,{recursive:true,force:true}).catch(()=>{});}
 }
+

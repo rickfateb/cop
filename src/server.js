@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createInfrastructureApi, publicServerSql, publicDvrSql, redactDvr, deviceAssignment, encryptSecret } from './infrastructure.js';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -152,20 +153,22 @@ const publicIngest = () => ({
   internal_port: Number(process.env.SFTP_PORT || 2222)
 });
 
+const infrastructureApi=createInfrastructureApi({pool,json,readJson:body});
 async function config(res) {
-  const [u,d,c,m,e,received] = await Promise.all([
+  const [u,d,c,m,e,received,servers,directories] = await Promise.all([
     pool.query('SELECT * FROM cop_units ORDER BY name'),
-    pool.query('SELECT * FROM cop_dvrs ORDER BY unit_id, name'),
+    pool.query(publicDvrSql),
     pool.query('SELECT * FROM cop_cameras ORDER BY dvr_id, channel'),
     pool.query(`SELECT m.id,m.event_id,m.unit_id,m.dvr_id,m.camera_id,m.detected_channel,m.filename,m.content_type,m.bytes,m.received_at,
       u.name AS unit_name,d.name AS dvr_name,c.name AS camera_name
       FROM cop_media m JOIN cop_units u ON u.id=m.unit_id JOIN cop_dvrs d ON d.id=m.dvr_id
       LEFT JOIN cop_cameras c ON c.id=m.camera_id ORDER BY m.received_at DESC LIMIT 16`),
     pool.query(`SELECT id,dvr_id,source_path,reason,created_at FROM cop_ingest_errors ORDER BY created_at DESC LIMIT 5`),
-    pool.query("SELECT count(*)::int AS total FROM cop_media WHERE received_at >= now() - interval '24 hours'")
+    pool.query("SELECT count(*)::int AS total FROM cop_media WHERE received_at >= now() - interval '24 hours'"),
+    pool.query(publicServerSql),pool.query('SELECT * FROM cop_server_directories ORDER BY friendly_name,id')
   ]);
   json(res, 200, {
-    units: u.rows, dvrs: d.rows, cameras: c.rows, defaults,
+    units: u.rows, dvrs: d.rows.map(r=>r.item), servers:servers.rows, server_directories:directories.rows, cameras: c.rows, defaults,
     recent_media: m.rows, ingest_errors: e.rows, received_24h: received.rows[0].total,
     ingest: publicIngest(), ingest_worker: { ok: ingestWorker.state.ok, last_scan_at: ingestWorker.state.last_scan_at }
   });
@@ -272,12 +275,14 @@ async function route(req, res) {
   if (externalMatch && req.method === 'POST') return gatewayIngest(req, res, externalMatch[1], json);
   if(url.pathname.startsWith('/api/sdk/'))return sdkApi(req,res,url);
   if (!sameToken(req.headers.authorization?.replace(/^Bearer /, ''))) return json(res, 401, { error: 'Acesso não autorizado.' });
+  if(/^\/api\/(servers|server-directories)(\/|$)/.test(url.pathname)||/^\/api\/dvrs\/[1-9]\d*\/credentials$/.test(url.pathname))return infrastructureApi(req,res,url);
   const playbackMatch=url.pathname.match(/^\/api\/dvrs\/([1-9]\d*)\/playback$/);
   if(playbackMatch&&req.method==='PUT'){
     const settings=validatePlaybackConfig(await body(req));
+    const assignment=await deviceAssignment(pool,{...(await pool.query('SELECT server_id,server_directory_id FROM cop_dvrs WHERE id=$1',[playbackMatch[1]])).rows[0],sdk_connector_name:settings.name});
     const saved=await pool.query(`UPDATE cop_dvrs SET playback_mode=$2,autoregister_id=$3,sdk_connector_name=$4,
       sdk_online=FALSE,updated_at=now() WHERE id=$1 RETURNING id,playback_mode,autoregister_id,sdk_connector_name`,
-      [playbackMatch[1],settings.mode,settings.register,settings.name]);
+      [playbackMatch[1],settings.mode,settings.register,assignment.connector]);
     if(!saved.rowCount)return json(res,404,{error:'DVR não encontrado.'});
     return json(res,200,saved.rows[0]);
   }
@@ -301,6 +306,12 @@ async function route(req, res) {
       : await pool.query('INSERT INTO cop_units(name,code,city,active) VALUES($1,$2,$3,$4) RETURNING *', values);
   } else if (match[1] === 'dvrs') {
     const unitId = id(data.unit_id); await exists('cop_units', unitId);
+    const old=match[2]?(await pool.query('SELECT * FROM cop_dvrs WHERE id=$1',[match[2]])).rows[0]:{};
+    if(!old)throw Object.assign(Error('DVR não encontrado.'),{status:404});
+    const assignment=await deviceAssignment(pool,{...data,server_id:data.server_id===undefined?old.server_id:data.server_id,server_directory_id:data.server_directory_id===undefined?old.server_directory_id:data.server_directory_id,sdk_connector_name:data.sdk_connector_name??old.sdk_connector_name});
+    if(data.clear_password&&data.access_password)throw Error('Para remover a senha, deixe o campo vazio.');
+    const password=data.clear_password?null:data.access_password?encryptSecret(data.access_password):old.access_password_cipher||null;
+    const playback=validatePlaybackConfig({playback_mode:data.playback_mode??old.playback_mode??'unavailable',autoregister_id:data.autoregister_id??old.autoregister_id,sdk_connector_name:assignment.connector});
     const model = nonEmpty(data.model, 'Modelo', 60);
     if (!models.includes(model)) throw Error('Modelo inválido.');
     const accessMode = data.access_mode;
@@ -314,14 +325,15 @@ async function route(req, res) {
       integer(data.http_port, 'Porta HTTP', 1, 65535), integer(data.rtsp_port, 'Porta RTSP', 1, 65535),
       integer(data.service_port, 'Porta de serviço', 1, 65535), remoteConnectionMode, accessUsername,
       accessMode, optional(data.connector_id, 120), optional(data.secret_ref, 120),
-      integer(data.channel_count, 'Canais', 1, 32), bool(data.active)];
+      integer(data.channel_count, 'Canais', 1, 32), bool(data.active),assignment.serverId,assignment.directoryId,password,playback.mode,playback.register,playback.name];
     if (values[12] && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(values[12])) throw Error('Referência de segredo: use nome de variável de ambiente.');
     result = match[2]
       ? await pool.query(`UPDATE cop_dvrs SET unit_id=$1,name=$2,model=$3,cloud_serial=$4,host=$5,http_port=$6,rtsp_port=$7,
           service_port=$8,remote_connection_mode=$9,access_username=$10,access_mode=$11,connector_id=$12,secret_ref=$13,
-          channel_count=$14,active=$15,updated_at=now() WHERE id=$16 RETURNING *`, [...values, id(match[2])])
-      : await pool.query(`INSERT INTO cop_dvrs(unit_id,name,model,cloud_serial,host,http_port,rtsp_port,service_port,remote_connection_mode,access_username,access_mode,connector_id,secret_ref,channel_count,active,ingest_key)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`, [...values, newIngestKey()]);
+          channel_count=$14,active=$15,server_id=$16,server_directory_id=$17,access_password_cipher=$18,playback_mode=$19,autoregister_id=$20,sdk_connector_name=$21,sdk_online=FALSE,updated_at=now() WHERE id=$22 RETURNING *`, [...values, id(match[2])])
+      : await pool.query(`INSERT INTO cop_dvrs(unit_id,name,model,cloud_serial,host,http_port,rtsp_port,service_port,remote_connection_mode,access_username,access_mode,connector_id,secret_ref,channel_count,active,server_id,server_directory_id,access_password_cipher,playback_mode,autoregister_id,sdk_connector_name,ingest_key)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING *`, [...values, newIngestKey()]);
+    result.rows=result.rows.map(redactDvr);
   } else {
     const dvrId = id(data.dvr_id); const dvr = await pool.query('SELECT channel_count FROM cop_dvrs WHERE id=$1', [dvrId]);
     if (!dvr.rowCount) throw Object.assign(Error('DVR não encontrado.'), { status: 404 });

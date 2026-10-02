@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { tokenHash, decryptSecret } from './infrastructure.js';
 import { storePlayback } from './investigation-worker.js';
 
 const fail=(message,status=400)=>Object.assign(Error(message),{status});
@@ -40,7 +41,7 @@ async function refreshStatus(client,id) {
  FROM cop_investigation_channels WHERE investigation_id=$1 GROUP BY investigation_id
  ) s WHERE i.id=s.investigation_id AND i.status NOT IN ('cancelled','completed','analyzing')`,[id]);
 }
-export async function claimSdkJob(pool,body) {
+export async function claimSdkJob(pool,body,serverId=null) {
  const {name,ids}=connectorIdentity(body);
  const client=await pool.connect();
  try {
@@ -49,20 +50,20 @@ export async function claimSdkJob(pool,body) {
     last_error='O receptor não concluiu a tarefa após três tentativas.',updated_at=now()
     FROM cop_investigations i JOIN cop_dvrs d ON d.id=i.dvr_id
     WHERE ic.investigation_id=i.id AND d.sdk_connector_name=$1
-    AND d.playback_mode='netsdk_autoregister' AND ic.status='retrieving'
+    AND d.playback_mode='netsdk_autoregister' AND d.server_id IS NOT DISTINCT FROM $2::bigint AND ic.status='retrieving'
     AND ic.sdk_attempts>=3 AND ic.sdk_lease_until<now()
-    RETURNING ic.investigation_id`,[name]);
+    RETURNING ic.investigation_id`,[name,serverId]);
   for(const row of expired.rows)await refreshStatus(client,row.investigation_id);
-  const selected=await client.query(`SELECT ic.*,i.dvr_id,d.autoregister_id
+  const selected=await client.query(`SELECT ic.*,i.dvr_id,d.autoregister_id,dir.directory_name
    FROM cop_investigation_channels ic JOIN cop_investigations i ON i.id=ic.investigation_id
-   JOIN cop_dvrs d ON d.id=i.dvr_id
+   JOIN cop_dvrs d ON d.id=i.dvr_id LEFT JOIN cop_server_directories dir ON dir.id=d.server_directory_id
    WHERE d.active=TRUE AND d.playback_mode='netsdk_autoregister' AND d.sdk_connector_name=$1
-   AND d.autoregister_id=ANY($2::text[])
+   AND d.autoregister_id=ANY($2::text[]) AND d.server_id IS NOT DISTINCT FROM $3::bigint
    AND i.status IN ('pending','waiting_connector','retrieving','partial','failed')
    AND ic.sdk_attempts<3 AND ic.sdk_next_attempt_at<=now()
    AND (ic.status IN ('pending','waiting_connector','failed') OR (ic.status='retrieving' AND ic.sdk_lease_until<now()))
    ORDER BY ic.sdk_next_attempt_at,i.created_at,ic.channel
-   FOR UPDATE OF ic SKIP LOCKED LIMIT 1`,[name,ids]);
+   FOR UPDATE OF ic SKIP LOCKED LIMIT 1`,[name,ids,serverId]);
   if(!selected.rowCount){await client.query('COMMIT');return null;}
   const job=selected.rows[0],lease=randomBytes(24).toString('hex');
   await client.query(`UPDATE cop_investigation_channels SET status='retrieving',sdk_lease_token=$3,
@@ -71,7 +72,7 @@ export async function claimSdkJob(pool,body) {
   await refreshStatus(client,job.investigation_id);
   await client.query('COMMIT');
   return {investigation_id:job.investigation_id,camera_id:job.camera_id,dvr_id:job.dvr_id,
-   device_id:job.autoregister_id,channel:job.channel,start:job.requested_start_at,end:job.requested_end_at,lease_token:lease};
+   device_id:job.autoregister_id,directory_name:job.directory_name||null,channel:job.channel,start:job.requested_start_at,end:job.requested_end_at,lease_token:lease};
  }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 }
 async function leasedRow(client,inv,cam,lease) {
@@ -130,21 +131,31 @@ export async function completeSdkJob(pool,inv,cam,lease,data,metadata) {
 }
 export function createSdkApi({pool,json,readJson,token=process.env.COP_SDK_CONNECTOR_TOKEN}) {
  return async (req,res,url)=>{
-  if(!connectorAuthorized(token,req.headers['x-cop-sdk-token']))return json(res,401,{error:'Conector SDK não autorizado.'});
+  const supplied=req.headers['x-cop-sdk-token'];
+  const server=typeof supplied==='string'&&supplied.length>=32&&supplied.length<=512?(await pool.query('SELECT id,connector_name,storage_root,registration_port FROM cop_servers WHERE active=TRUE AND token_hash=$1',[tokenHash(supplied)])).rows[0]:null;
+  if(!server&&!connectorAuthorized(token,supplied))return json(res,401,{error:'Conector SDK não autorizado.'});
+  const scopedIdentity=body=>{const identity=connectorIdentity(body);if(server&&identity.name!==server.connector_name)throw fail('Este token pertence a outro servidor.',403);return body;};
   if(req.method!=='POST')return json(res,405,{error:'Método não permitido.'});
-  if(url.pathname==='/api/sdk/claim')return json(res,200,{job:await claimSdkJob(pool,await readJson(req))});
+  if(url.pathname==='/api/sdk/config'){
+   if(!server)return json(res,404,{error:'Token ainda não vinculado a um servidor cadastrado.'});
+   const devices=(await pool.query("SELECT autoregister_id,access_username,access_password_cipher FROM cop_dvrs WHERE server_id=$1 AND active=TRUE AND playback_mode='netsdk_autoregister' AND autoregister_id IS NOT NULL AND access_password_cipher IS NOT NULL ORDER BY id LIMIT 64",[server.id])).rows;
+   return json(res,200,{connector_name:server.connector_name,state_dir:server.storage_root,port:server.registration_port,devices:devices.map(d=>({id:d.autoregister_id,username:d.access_username||'admin',password:decryptSecret(d.access_password_cipher)}))});
+  }
+  if(url.pathname==='/api/sdk/claim')return json(res,200,{job:await claimSdkJob(pool,scopedIdentity(await readJson(req)),server?.id||null)});
   if(url.pathname==='/api/sdk/heartbeat'){
-   const body=await readJson(req),{name,ids}=connectorIdentity(body);
+   const body=scopedIdentity(await readJson(req)),{name,ids}=connectorIdentity(body);
    const online=body.online_ids;
    if(!Array.isArray(online)||online.some(id=>!ids.includes(id)))throw fail('Estado do conector inválido.');
    await pool.query(`UPDATE cop_dvrs SET sdk_online=autoregister_id=ANY($3::text[]),
     sdk_last_seen_at=CASE WHEN autoregister_id=ANY($3::text[]) THEN now() ELSE sdk_last_seen_at END
-    WHERE sdk_connector_name=$1 AND autoregister_id=ANY($2::text[])`,[name,ids,online]);
+    WHERE sdk_connector_name=$1 AND autoregister_id=ANY($2::text[]) AND server_id IS NOT DISTINCT FROM $4::bigint`,[name,ids,online,server?.id||null]);
    return json(res,200,{ok:true});
   }
   const match=url.pathname.match(/^\/api\/sdk\/jobs\/([1-9]\d*)\/([1-9]\d*)\/(renew|failure|complete)$/);
   if(!match)return json(res,404,{error:'Rota SDK não encontrada.'});
   const [,inv,cam,action]=match,lease=req.headers['x-cop-lease-token'];
+  const scope=await pool.query('SELECT i.id FROM cop_investigations i JOIN cop_dvrs d ON d.id=i.dvr_id WHERE i.id=$1 AND d.server_id IS NOT DISTINCT FROM $2::bigint',[inv,server?.id||null]);
+  if(!scope.rowCount)throw fail('Tarefa de outro servidor ou indisponível.',403);
   if(action==='renew')return json(res,200,await renewSdkJob(pool,inv,cam,lease));
   if(action==='failure')return json(res,200,await failSdkJob(pool,inv,cam,lease,(await readJson(req)).code));
   if(req.headers['content-type']!=='video/mp4')throw fail('Envie video/mp4.');

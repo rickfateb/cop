@@ -75,3 +75,17 @@ class RelayTests(unittest.TestCase):
         with self.assertRaises(relay.RelayError):relay.frame(["config","x"*4097])
 
 if __name__=="__main__":unittest.main()
+
+class DirectoryTests(unittest.TestCase):
+    def test_unit_directories_cannot_escape_server_root(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            target = relay.job_directory(root,"unidades/cerejeiras")
+            self.assertEqual(target.parent,root/"unidades/cerejeiras")
+            for invalid in ("../outside","/etc","a/../b"):
+                with self.assertRaises(relay.RelayError):
+                    relay.job_directory(root,invalid)
+            (root/"symlink").symlink_to(root.parent,target_is_directory=True)
+            with self.assertRaises(relay.RelayError):
+                relay.job_directory(root,"symlink/escape")

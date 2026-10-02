@@ -95,3 +95,31 @@ de rede. A conversão com timestamps foi testada com DAV real do piloto.
 O CI usa PostgreSQL temporário para testar migração repetida, reservas concorrentes,
 expiração, conclusão idempotente, tentativas e cancelamento. O SDK do fabricante
 não é exigido nos testes públicos do CI.
+
+## Cadastro central de servidores e senhas
+
+A aba Servidores aceita múltiplos receptores: nome amigável, IP/domínio, usuário,
+porta SSH, senha/chave SSH opcional, porta Auto Registro, identificador único,
+token e diretório base. Não realiza acesso SSH nem provisiona servidores.
+O token pode ser gerado ao salvar e consultado/copiado no editor administrativo.
+Tokens e senhas são criptografados com AES-256-GCM. Configure COP_CREDENTIALS_KEY
+com 32 bytes aleatórios em hexadecimal (64 caracteres); mantenha essa chave nos
+backups protegidos junto com o banco. Não altere a chave sem migrar as credenciais.
+As listagens omitem credenciais; a consulta ocorre somente na rota administrativa,
+com respostas sem cache. Campos vazios mantêm o segredo atual; a remoção é explícita.
+
+Cadastre diretórios relativos ao diretório base, com nome amigável, e vincule o
+DVR ao servidor e diretório da unidade. A configuração do DVR salva a senha e
+os parâmetros de recuperação na mesma operação. Um diretório de outro servidor
+é rejeitado também pelo banco. O token de um servidor só autentica suas próprias
+configurações e tarefas. O token legado continua funcionando para DVRs sem vínculo.
+
+Depois da publicação do portal, o instalador pode usar o token cadastrado no
+servidor e buscar os dispositivos ativos e suas senhas por HTTPS. Neste modo,
+as credenciais dos DVRs permanecem em memória na VPS e não são copiadas ao JSON
+local. Atualizações de dispositivos/senhas sincronizam a cada 60 segundos quando
+o receptor está sem tarefa; renovar o token exige atualizar o JSON da VPS.
+Mudanças na porta/diretório base exigem atualizar a configuração local e as
+permissões do serviço; não alteram automaticamente a rede ou o firewall do DVR.
+Os subdiretórios da unidade guardam os fragmentos temporários de recuperação;
+eles são criados na primeira tarefa. A mídia final continua guardada no COP.

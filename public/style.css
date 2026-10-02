@@ -7,3 +7,8 @@
 
 .investigation-form{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:20px 0 26px;padding:18px;border:1px solid #dfe9ea;border-radius:13px;background:#f8fbfb}.investigation-form .field{display:flex;flex-direction:column;gap:6px}.investigation-form .wide{grid-column:1/-1}.investigation-form label{font-size:11px;font-weight:800;color:#557178}.investigation-form input,.investigation-form select,.investigation-form textarea{width:100%;border:1px solid #d7e1e2;border-radius:9px;padding:10px;background:white;font:inherit;color:#263f46}.investigation-form textarea{min-height:76px;resize:vertical}.channel-checks{display:flex;gap:8px;flex-wrap:wrap}.channel-checks label,.channel-checks span{border:1px solid #dce6e7;background:white;border-radius:9px;padding:8px 10px;font-size:11px;color:#536e74}.channel-checks.compact{margin-top:12px}.investigation-note{font-size:11px;color:#6d858a;background:#eef7f5;border-radius:9px;padding:10px}.status-badge{background:#edf1f2;color:#587177;border-radius:30px;padding:6px 10px;font-size:10px;font-weight:800}.investigation-list{margin-top:10px}
 @media(max-width:800px){.investigation-form{grid-template-columns:1fr 1fr}.investigation-form .wide{grid-column:1/-1}}
+
+
+.secret-control{display:flex;gap:6px;align-items:center;margin-top:7px}.secret-control input{margin:0;min-width:0;flex:1}.secret-control button{font-size:12px;padding:10px}.directory-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}#servers-view>.dvr{margin-top:18px}
+
+.secret-control textarea{flex:1;min-width:0;font:inherit;border:1px solid #d8e3e5;border-radius:8px;padding:11px}.masked-secret{-webkit-text-security:disc}

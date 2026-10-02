@@ -183,6 +183,31 @@ class Native:
         self.thread.join(timeout=1)
         self.proc.stdout.close()
 
+def portal_config(config):
+    url = urllib.parse.urlsplit(config["cop_url"])
+    if url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment:
+        raise RelayError("COP_URL_REQUIRES_HTTPS")
+    request = urllib.request.Request(config["cop_url"].rstrip("/")+"/api/sdk/config", data=b"{}",
+        headers={"X-Cop-Sdk-Token":config["connector_token"],"Content-Type":"application/json"},method="POST")
+    try:
+        with urllib.request.build_opener(NoRedirect).open(request,timeout=15) as response:
+            return json.loads(response.read(65536))
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None  # Existing connector token and local device configuration remain supported.
+        raise
+
+def job_directory(root, name):
+    name = name or ""
+    if name and (not __import__("re").fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*",name)
+                 or any(p in (".","..") for p in name.split("/"))):
+        raise RelayError("INVALID_DIRECTORY")
+    target = (root / name).resolve()
+    if target != root and root not in target.parents:
+        raise RelayError("INVALID_DIRECTORY")
+    target.mkdir(mode=0o700,parents=True,exist_ok=True)
+    return pathlib.Path(tempfile.mkdtemp(prefix="job-",dir=target))
+
 class Relay:
     def __init__(self, config):
         self.config = config
@@ -197,8 +222,8 @@ class Relay:
         self.state = pathlib.Path(config["state_dir"]).resolve()
         self.state.mkdir(parents=True, exist_ok=True)
         # Interrupted jobs are leased again by the portal. Remove their local fragments.
-        for leftover in self.state.glob("job-*"):
-            if leftover.is_dir() and not leftover.is_symlink():
+        for leftover in self.state.rglob("job-*"):
+            if leftover.is_dir() and not leftover.is_symlink() and len(leftover.name)==12 and leftover.resolve().is_relative_to(self.state):
                 shutil.rmtree(leftover)
         self.stop = threading.Event()
         self.opener = urllib.request.build_opener(NoRedirect)
@@ -253,8 +278,9 @@ class Relay:
         self.lease_lost.clear()
         with self.active_lock:
             self.active = job
-        directory = pathlib.Path(tempfile.mkdtemp(prefix="job-", dir=self.state))
+        directory = None
         try:
+            directory = job_directory(self.state,job.get("directory_name"))
             start, end = local_time(job["start"]), local_time(job["end"])
             parts = []
             total = 0
@@ -318,12 +344,26 @@ class Relay:
         finally:
             with self.active_lock:
                 self.active = None
-            shutil.rmtree(directory, ignore_errors=True)
+            if directory is not None:
+                shutil.rmtree(directory, ignore_errors=True)
 
     def run(self):
         threading.Thread(target=self.heartbeat, daemon=True).start()
         try:
+            next_sync = time.monotonic()+60
             while not self.stop.is_set():
+                if self.config.get("portal_managed") and time.monotonic()>=next_sync:
+                    next_sync=time.monotonic()+60
+                    try:
+                        remote=portal_config(self.config)
+                        if remote:
+                            self.config["connector_name"]=remote["connector_name"]
+                        if remote and remote["devices"]!=self.config["devices"]:
+                            self.native.close()
+                            self.config["devices"]=remote["devices"]
+                            self.native=Native(self.config,self.state)
+                    except Exception:
+                        print("COP sincronizacao indisponivel",flush=True)
                 if self.native.proc.poll() is not None:
                     raise RelayError("NATIVE_EXITED")
                 try:
@@ -345,6 +385,12 @@ class Relay:
 def main():
     os.umask(0o077)
     config = json.loads(pathlib.Path(sys.argv[1]).read_text())
+    if config.get("portal_managed"):
+        remote=portal_config(config)
+        if remote:
+            if pathlib.Path(remote["state_dir"]).resolve()!=pathlib.Path(config["state_dir"]).resolve() or remote["port"]!=config["port"]:
+                raise RelayError("SERVER_SETTINGS_CHANGED_REINSTALL_REQUIRED")
+            config.update({"devices":remote["devices"],"connector_name":remote["connector_name"]})
     relay = Relay(config)
     def shutdown(*_):
         relay.stop.set()
