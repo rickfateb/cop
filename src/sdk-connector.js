@@ -24,6 +24,7 @@ export function validatePlaybackConfig(body) {
  return {mode,register,name};
 }
 async function refreshStatus(client,id) {
+ await client.query('SELECT id FROM cop_investigations WHERE id=$1 FOR UPDATE',[id]);
  await client.query(`UPDATE cop_investigations i SET status=s.status,connector_status=s.connector,
  last_error=CASE WHEN s.status='failed' THEN 'Falha ao recuperar todos os canais.' ELSE NULL END,updated_at=now()
  FROM (
@@ -41,7 +42,6 @@ async function refreshStatus(client,id) {
 }
 export async function claimSdkJob(pool,body) {
  const {name,ids}=connectorIdentity(body);
- if(!ids.length)return null;
  const client=await pool.connect();
  try {
   await client.query('BEGIN');

@@ -33,7 +33,7 @@ test('SDK queue: concurrent claim, lease recovery, stale completion, idempotence
   const unit=(await pool.query("INSERT INTO cop_units(name,code) VALUES('Test','TEST') RETURNING id")).rows[0];
   const dvr=(await pool.query(`INSERT INTO cop_dvrs(unit_id,name,model,channel_count,playback_mode,autoregister_id)
     VALUES($1,'DVR','MHDX 1104',4,'netsdk_autoregister','101') RETURNING id`,[unit.id])).rows[0];
-  await pool.query("INSERT INTO cop_cameras(dvr_id,channel,name) VALUES($1,1,'Canal 1')",[dvr.id]);
+  await pool.query("INSERT INTO cop_cameras(dvr_id,channel,name,policy) VALUES($1,1,'Canal 1','{}')",[dvr.id]);
   const input={unit_id:unit.id,reference_at:'2026-09-30T13:41:38Z',window_before_seconds:0,window_after_seconds:30,reason:'SDK test',channels:[1]};
   await assert.rejects(()=>createInvestigation(pool,{...input,window_after_seconds:0}));
   const investigation=await createInvestigation(pool,input);
@@ -63,5 +63,10 @@ test('SDK queue: concurrent claim, lease recovery, stale completion, idempotence
   const cancelled=await createInvestigation(pool,input);
   await pool.query("UPDATE cop_investigations SET status='cancelled' WHERE id=$1",[cancelled.id]);
   assert.equal(await claimSdkJob(pool,identity),null);
+  await pool.query("INSERT INTO cop_cameras(dvr_id,channel,name,policy) VALUES($1,2,'Canal 2','{}')",[dvr.id]);
+  const parallel=await createInvestigation(pool,{...input,channels:[1,2]});
+  const jobs=[await claimSdkJob(pool,identity),await claimSdkJob(pool,identity)];
+  await Promise.all(jobs.map(job=>completeSdkJob(pool,job.investigation_id,job.camera_id,job.lease_token,data,{duration_seconds:30})));
+  assert.equal((await pool.query('SELECT status FROM cop_investigations WHERE id=$1',[parallel.id])).rows[0].status,'ready');
  }finally{await pool.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();}
 });
