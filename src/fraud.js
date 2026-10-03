@@ -176,7 +176,7 @@ async function pollRunning(pool, logger) {
 
 async function submitPending(pool, logger) {
   const jobs=(await pool.query(`
-    SELECT j.id,j.event_id,j.attempts,e.unit_id,e.dvr_id,e.camera_id,e.started_at,u.code unit_code,u.name unit_name
+    SELECT j.id,j.event_id,j.attempts,j.analysis_protocol,e.unit_id,e.dvr_id,e.camera_id,e.started_at,u.code unit_code,u.name unit_name
     FROM cop_analysis_jobs j JOIN cop_events e ON e.id=j.event_id JOIN cop_units u ON u.id=e.unit_id
     WHERE j.status='pending' AND j.not_before<=now() AND j.attempts<5
     ORDER BY j.not_before,j.id LIMIT 2`)).rows;

@@ -6,3 +6,8 @@ export const fimDaFesta=Object.freeze({
  preserve_originals_until_explicit_consent:true,
  description:'Sinalizar pessoas fumando ou sem camisa somente com evidência visual clara, vinculada à foto, ao horário e ao canal. Manter os demais critérios da análise; sinalizadores não elevam a classificação de fraude.'
 });
+
+export function captureProtocol(id=process.env.COP_CAPTURE_PROTOCOL||fimDaFesta.id){
+ if(id!==fimDaFesta.id)throw Error('Protocolo de análise desconhecido.');
+ return fimDaFesta;
+}

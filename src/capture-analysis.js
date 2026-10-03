@@ -1,5 +1,5 @@
 import {readFile} from 'node:fs/promises';
-import {fimDaFesta} from './protocols.js';
+import {captureProtocol} from './protocols.js';
 
 // Capture v1 retained sample timestamps, not the event metadata supplied by the
 // receiver. Reconstruction is allowed only when the configured cooldown keeps
@@ -26,6 +26,7 @@ export function groupCapturePhotos(rows,sampling) {
 export async function enqueueCaptureAnalysis(pool,captureId,requestedBy) {
  if(!/^[1-9]\d*$/.test(String(captureId))||typeof requestedBy!=='string'||!requestedBy.trim())throw Error('Pedido de analise invalido.');
  await pool.query(await readFile(new URL('./capture-analysis-schema.sql',import.meta.url),'utf8'));
+ const protocol=captureProtocol();
  const db=await pool.connect();
  try {
   await db.query('BEGIN');
@@ -58,7 +59,7 @@ export async function enqueueCaptureAnalysis(pool,captureId,requestedBy) {
       AND cm.capture_id=$4 AND (cop_media.event_id IS NULL OR cop_media.event_id=$2)`,[ids,eventId,first,captureId]);
     if(changed.rowCount!==group.length)throw Error('Vinculo da sequencia inconsistente.');
     const job=await db.query(`INSERT INTO cop_analysis_jobs(event_id,status,not_before,analysis_protocol) VALUES($1,'pending',$2,$3::jsonb)
-     ON CONFLICT(event_id) DO NOTHING RETURNING id`,[eventId,first,JSON.stringify(fimDaFesta)]);
+     ON CONFLICT(event_id) DO NOTHING RETURNING id`,[eventId,first,JSON.stringify(protocol)]);
     newJobs+=job.rowCount;sequences++;photos+=group.length;
    }
   }
