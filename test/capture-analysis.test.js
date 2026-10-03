@@ -36,6 +36,7 @@ export async function verifyAnalysisDatabase(pool){
   await pool.query('INSERT INTO cop_capture_media(capture_id,camera_id,sample_key,media_id,lease_token) VALUES($1,$2,$3,$4,$5)',[id,c,'image/jpeg:'+row.sample_at.toISOString(),media,'test']);
  }
  const queued=await enqueueCaptureAnalysis(pool,id,'Ricardo');assert.equal(queued.sequences,2);assert.equal(queued.preserved_originals,6);assert.equal(queued.new_jobs,2);
+ assert.equal((await pool.query('SELECT analysis_protocol FROM cop_analysis_jobs ORDER BY id LIMIT 1')).rows[0].analysis_protocol.id,'fim_da_festa_v1');
  const repeated=await enqueueCaptureAnalysis(pool,id,'Ricardo');assert.equal(repeated.new_jobs,0);
  await pool.query("UPDATE cop_analysis_jobs SET status='done'");
  const media=(await pool.query('SELECT id FROM cop_media ORDER BY id LIMIT 1')).rows[0].id;

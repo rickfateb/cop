@@ -58,7 +58,7 @@ async function submitOne(pool, job, logger) {
     unit_name: job.unit_name,
     captured_at: toIso(job.started_at),
     profile: 'fraude_v1',
-    metadata: { cop_event_id: String(job.event_id), dvr_id: String(job.dvr_id), camera_id: job.camera_id == null ? null : String(job.camera_id), sampling_seconds: 3 },
+    metadata: { cop_event_id: String(job.event_id), dvr_id: String(job.dvr_id), camera_id: job.camera_id == null ? null : String(job.camera_id), sampling_seconds: 3, analysis_protocol: job.analysis_protocol || null },
     media: chosen.map(row => ({
       external_id: `cop-media-${row.id}`,
       kind: 'photo',

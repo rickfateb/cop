@@ -21,7 +21,7 @@ export async function listReviews(pool,{limit=100,clothingOnly=false,unitId=null
  if(unitId){if(!/^[1-9]\d*$/.test(String(unitId)))throw Object.assign(Error('Unidade inválida.'),{status:400});params.push(unitId);where.push(`e.unit_id=$${params.length}`);}
  if(clothingOnly)where.push("jsonb_array_length(COALESCE(j.analysis_result->'clothing_matches','[]'::jsonb))>0");
  params.push(Math.min(100,Math.max(1,Number(limit)||100)));
- return (await pool.query(`SELECT j.id,j.event_id,j.analysis_result,e.started_at,u.name unit_name,c.name camera_name,
+ return (await pool.query(`SELECT j.id,j.event_id,j.analysis_result,j.analysis_protocol,e.started_at,u.name unit_name,c.name camera_name,
   (SELECT m.id FROM cop_media m WHERE m.event_id=e.id AND m.content_type LIKE 'video/%' ORDER BY m.id LIMIT 1) video_media_id
   FROM cop_analysis_jobs j JOIN cop_events e ON e.id=j.event_id JOIN cop_units u ON u.id=e.unit_id
   LEFT JOIN cop_cameras c ON c.id=e.camera_id WHERE ${where.join(' AND ')} ORDER BY e.started_at DESC,j.id DESC LIMIT $${params.length}`,params)).rows;

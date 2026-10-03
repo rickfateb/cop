@@ -34,3 +34,5 @@ $$;
 DROP TRIGGER IF EXISTS cop_preserved_media_guard ON cop_media;
 CREATE TRIGGER cop_preserved_media_guard BEFORE DELETE OR UPDATE OF data,sha256,bytes ON cop_media
  FOR EACH ROW EXECUTE FUNCTION cop_protect_preserved_media();
+
+ALTER TABLE cop_analysis_jobs ADD COLUMN IF NOT EXISTS analysis_protocol JSONB;
