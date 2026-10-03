@@ -249,15 +249,30 @@ async function sendNineOClock(pool, logger) {
 }
 
 export function startFraudAutomation({ pool, logger=console }={}) {
-  let stopped=false,busy=false,timer;
+  let stopped=false,busy=false,timer,lastProgress=0;
+  const logCaptureProgress=async()=>{
+    const [jobs,results,media]=await Promise.all([
+      pool.query(`SELECT j.status,count(*)::int count FROM cop_capture_analysis_sequences s
+        JOIN cop_analysis_jobs j ON j.event_id=s.event_id WHERE s.capture_id=5 GROUP BY j.status`),
+      pool.query(`SELECT j.analysis_result->>'classification' classification,count(*)::int count
+        FROM cop_capture_analysis_sequences s JOIN cop_analysis_jobs j ON j.event_id=s.event_id
+        WHERE s.capture_id=5 AND j.analysis_result IS NOT NULL
+        GROUP BY j.analysis_result->>'classification'`),
+      pool.query(`SELECT count(*)::int total,count(*) FILTER (WHERE h.media_id IS NOT NULL AND h.released_at IS NULL)::int held
+        FROM cop_capture_media cm LEFT JOIN cop_media_preservation_holds h ON h.media_id=cm.media_id
+        WHERE cm.capture_id=5`)
+    ]);
+    logger.log('COP capture 5 progress',JSON.stringify({jobs:Object.fromEntries(jobs.rows.map(r=>[r.status,r.count])),
+      classifications:Object.fromEntries(results.rows.map(r=>[r.classification,r.count])),media:media.rows[0]}));
+  };
   const tick=async()=>{
     if(stopped||busy)return;
     busy=true;
-    try{await pollRunning(pool,logger);await submitPending(pool,logger);await sendNineOClock(pool,logger);}
+    try{await pollRunning(pool,logger);await submitPending(pool,logger);await sendNineOClock(pool,logger);
+      if(Date.now()-lastProgress>=300000){lastProgress=Date.now();await logCaptureProgress().catch(error=>logger.warn('COP capture progress unavailable',error.code||error.name));}}
     catch(error){logger.error('COP fraude automação:',error.message);}
     finally{busy=false;if(!stopped)timer=setTimeout(tick,10000);}
   };
   void tick();
   return {stop(){stopped=true;if(timer)clearTimeout(timer);}};
 }
-
