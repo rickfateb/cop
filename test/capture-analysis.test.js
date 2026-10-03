@@ -30,7 +30,7 @@ export async function verifyAnalysisDatabase(pool){
  const d=(await pool.query("INSERT INTO cop_dvrs(unit_id,name,model,channel_count) VALUES($1,'DVR','MHDX 1104',4) RETURNING id",[u])).rows[0].id;
  const c=(await pool.query("INSERT INTO cop_cameras(dvr_id,name,channel,policy) VALUES($1,'Camera',2,$2) RETURNING id",[d,sampling])).rows[0].id;
  const id=(await pool.query("INSERT INTO cop_capture_requests(unit_id,dvr_id,start_at,end_at,capture_mode,media_type,status,requested_by) VALUES($1,$2,'2026-09-10T03:00Z','2026-09-11T03:00Z','motion','photo','ready','test') RETURNING id",[u,d])).rows[0].id;
- await pool.query("INSERT INTO cop_capture_channels(capture_id,camera_id,channel,sampling_config,status,events_found) VALUES($1,$2,2,$3,'ready',2)",[id,c,sampling]);
+ await pool.query("INSERT INTO cop_capture_channels(capture_id,camera_id,channel,sampling_config,status,events_found) VALUES($1,$2,2,$3,'ready',2)",[id,c,{policy:sampling}]);
  for(const row of [photo(0),photo(3),photo(6),photo(9),photo(60),photo(63)]){
   const media=(await pool.query("INSERT INTO cop_media(unit_id,dvr_id,camera_id,source_path,filename,content_type,bytes,sha256,data,expires_at,recorded_at) VALUES($1,$2,$3,$4,'photo.jpg','image/jpeg',4,$4,$5,now()+interval '15 days',$6) RETURNING id",[u,d,c,String(row.media_id),Buffer.from([255,216,255,217]),row.sample_at])).rows[0].id;
   await pool.query('INSERT INTO cop_capture_media(capture_id,camera_id,sample_key,media_id,lease_token) VALUES($1,$2,$3,$4,$5)',[id,c,'image/jpeg:'+row.sample_at.toISOString(),media,'test']);

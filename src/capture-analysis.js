@@ -37,7 +37,7 @@ export async function enqueueCaptureAnalysis(pool,captureId,requestedBy) {
     m.content_type,m.event_id,m.data IS NOT NULL original_present
     FROM cop_capture_media cm JOIN cop_media m ON m.id=cm.media_id
     WHERE cm.capture_id=$1 AND cm.camera_id=$2 ORDER BY sample_at,cm.media_id`,[captureId,channel.camera_id])).rows;
-   const groups=groupCapturePhotos(frames,channel.sampling_config);
+   const groups=groupCapturePhotos(frames,channel.sampling_config.policy);
    if(groups.length!==channel.events_found)throw Error('A quantidade de sequencias diverge dos eventos registrados pelo DVR.');
    for(const group of groups) {
     const first=group[0].sample_at,last=group.at(-1).sample_at,ids=group.map(m=>m.media_id);
