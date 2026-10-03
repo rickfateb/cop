@@ -92,13 +92,15 @@ export function startDriveArchive({pool,drive=new DriveClient(),now=()=>new Date
    }
    const expired=(await db.query(`SELECT id,drive_file_id,drive_md5,drive_folder_id,bytes FROM cop_media m
     WHERE data IS NOT NULL AND drive_verified_at IS NOT NULL AND received_at<=$1::timestamptz-interval '15 days'
+    AND NOT EXISTS(SELECT 1 FROM cop_media_preservation_holds h WHERE h.media_id=m.id AND h.released_at IS NULL)
     AND NOT EXISTS(SELECT 1 FROM cop_analysis_jobs j WHERE j.event_id=m.event_id AND j.status IN ('pending','running')) LIMIT 20`,[now()])).rows;
    for(const row of expired){
     if(stopped||!archiveWindow(now()))break;
     // Revalidate remote copy immediately before releasing the local payload.
     const meta=await drive.metadata(row.drive_file_id);
     if(!meta.trashed&&Number(meta.size)===Number(row.bytes)&&meta.md5Checksum===row.drive_md5&&meta.parents?.includes(row.drive_folder_id)){
-     const released=await db.query('UPDATE cop_media SET data=NULL,local_released_at=now() WHERE id=$1 AND drive_verified_at IS NOT NULL AND data IS NOT NULL',[row.id]);state.released+=released.rowCount;
+     const released=await db.query(`UPDATE cop_media SET data=NULL,local_released_at=now() WHERE id=$1 AND drive_verified_at IS NOT NULL AND data IS NOT NULL
+      AND NOT EXISTS(SELECT 1 FROM cop_media_preservation_holds h WHERE h.media_id=cop_media.id AND h.released_at IS NULL)`,[row.id]);state.released+=released.rowCount;
     }
    }
   }catch(e){state.last_error=e.httpStatus?`DRIVE_HTTP_${e.httpStatus}`:'ARCHIVE_UNAVAILABLE';logger.error('COP Drive: '+state.last_error);}

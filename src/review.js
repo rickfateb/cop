@@ -3,15 +3,16 @@ export function mapReviewResult(detail, media) {
  if(!result||!['Sem alerta','Revisar','Grave - Fraude'].includes(result.classification))throw Error('Resultado de análise inválido.');
  const byId=new Map(media.map(m=>[String(m.id),m]));
  const refs=new Map((detail.media||[]).map(m=>[String(m.id),/^cop-media-(\d+)$/.exec(m.external_id||'')?.[1]]));
- const map=items=>(items||[]).slice(0,29).flatMap(item=>{
+ const map=(items,flags=false)=>(items||[]).slice(0,29).flatMap(item=>{
   const m=byId.get(refs.get(String(item.media_id)));
   if(!m)return [];
-  return [{media_id:String(m.id),description:String(item.description||'').slice(0,2000),channel:m.detected_channel??null,
+  return [{...(flags?{type:item.type}:{}),media_id:String(m.id),description:String(item.description||'').slice(0,2000),channel:m.detected_channel??null,
    frame_offset_seconds:m.frame_offset_seconds??null,recorded_at:m.recorded_at??null}];
  });
  return {classification:result.classification,summary:String(detail.summary||result.summary||'').slice(0,4000),
   rationale:String(result.rationale||'').slice(0,4000),confidence:result.confidence,
   observations:map(result.observations),clothing_matches:map(result.clothing_matches).slice(0,5),
+  flags:map((result.flags||[]).filter(f=>['fumando','sem_camisa'].includes(f.type)),true),
   reference_id:'cerejeiras-20261002-v1',requires_human_review:true,payment_status:'not_verified'};
 }
 

@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {mapReviewResult,listReviews,reviewIncident} from '../src/review.js';
 test('review evidence is restricted to the event; clothing matches preserve the independent decision',()=>{
  const detail={summary:'Compra regular visível.',media:[{id:'a',external_id:'cop-media-7'},{id:'foreign',external_id:'cop-media-99'}],
-  fraud_result:{classification:'Sem alerta',confidence:.8,rationale:'Sem comportamento preocupante.',observations:[{media_id:'a',description:'Retira uma lata.'}],clothing_matches:[{media_id:'a',description:'Bermuda escura e sacola amarela.'},{media_id:'foreign',description:'Fora do evento.'}]}};
+  fraud_result:{classification:'Sem alerta',confidence:.8,rationale:'Sem comportamento preocupante.',flags:[{type:'sem_camisa',media_id:'a',description:'Torso descoberto visível.'},{type:'fumando',media_id:'foreign',description:'Fora do evento.'},{type:'identidade',media_id:'a',description:'Invalido.'}],observations:[{media_id:'a',description:'Retira uma lata.'}],clothing_matches:[{media_id:'a',description:'Bermuda escura e sacola amarela.'},{media_id:'foreign',description:'Fora do evento.'}]}};
  const result=mapReviewResult(detail,[{id:7,detected_channel:4,frame_offset_seconds:9,recorded_at:'2026-10-02T22:13:13Z'}]);
- assert.equal(result.classification,'Sem alerta');assert.equal(result.clothing_matches.length,1);
+ assert.equal(result.flags.length,1);assert.equal(result.flags[0].type,'sem_camisa');assert.equal(result.flags[0].media_id,'7');assert.equal(result.classification,'Sem alerta');assert.equal(result.clothing_matches.length,1);
  assert.equal(result.clothing_matches[0].channel,4);assert.equal(result.observations[0].recorded_at,'2026-10-02T22:13:13Z');
  assert.equal(result.requires_human_review,true);assert.equal(result.payment_status,'not_verified');
 });
