@@ -143,10 +143,11 @@ Ele não configura firewall, DVR nem permissões novas.
 
 O protocolo de nove campos adiciona query e photo. A busca paginada usa FindFile/
 FindNextFile/FindClose, filtros 2 e 11, nunca alarmes genéricos. Fotos são snapshots
-JPEG do playback, validados pelo horário OSD, sem download DAV. A biblioteca precisa
-oferecer decodificação/captura de playback no ambiente Linux instalado; presença do
-símbolo por si só não homologa esse funcionamento. Sem suporte, retorna PHOTO_FAILED
-ou PHOTO_UNSUPPORTED. Não há fallback para gravação, foto ao vivo ou filtro diferente.
+JPEG do playback. No Linux sem janela, o callback recebe até 16 MiB do stream
+comprimido em memória; FFmpeg seleciona um único frame pelo PTS original do DVR,
+com tolerância máxima de um segundo. Somente o JPEG é escrito/enviado. Não usa
+a API de download nem cria DAV/MP4 temporário para fotos. Falha de playback ou
+horário sem frame válido retorna PHOTO_FAILED; interface ausente, PHOTO_UNSUPPORTED. Não há fallback para gravação, foto ao vivo ou filtro diferente.
 
 Testes locais do protocolo usam o header real do SDK autorizado e biblioteca mock.
 Antes de considerar operacional, faça uma captura curta no canal 2 de Cerejeiras

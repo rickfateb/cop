@@ -2,6 +2,7 @@ import datetime as dt
 import importlib.util
 import os
 import pathlib
+import subprocess
 import tempfile
 import time
 import unittest
@@ -18,12 +19,20 @@ class NativeTests(unittest.TestCase):
         self.directory=tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.state=pathlib.Path(self.directory.name)
+        stream=self.state/'mock-stream.nut'
+        origin=dt.datetime(2026,9,30,10,41,36,tzinfo=dt.timezone.utc).timestamp()
+        subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=blue:s=32x32:r=2:d=5',
+            '-c:v','mpeg4','-output_ts_offset',str(origin),'-f','nut',str(stream)],check=True)
+        old_stream=os.environ.get('MOCK_STREAM_FILE')
+        os.environ['MOCK_STREAM_FILE']=str(stream)
         native=relay.Native({"receiver":str(ROOT/"build/cop-sdk-receiver"),
             "sdk_so":str(ROOT/"build/mock-sdk.so"),"port":8000,
             "devices":[{"id":"101","username":"admin","password":"mock-secret"}]},self.state)
         self.addCleanup(native.close)
         if old is None:os.environ.pop("MOCK_MODE",None)
         else:os.environ["MOCK_MODE"]=old
+        if old_stream is None:os.environ.pop('MOCK_STREAM_FILE',None)
+        else:os.environ['MOCK_STREAM_FILE']=old_stream
         deadline=time.monotonic()+3
         while not native.online_ids() and time.monotonic()<deadline:time.sleep(.02)
         return native
@@ -64,14 +73,28 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(target.read_bytes(),b"existing")
 
     def test_motion_smart_query_and_snapshot_without_download(self):
-        native=self.native();start=dt.datetime(2026,9,30,10,41,38)
+        native=self.native('photo-only');start=dt.datetime(2026,9,30,10,41,38)
         for mode in ('motion','ai'):
             records=native.query('101',1,start,start+dt.timedelta(seconds=30),mode)
             self.assertEqual(records[0]['type'],mode)
             self.assertEqual(records[0]['start'],start.isoformat())
         path=self.state/'photo.jpg'
         self.assertEqual(native.photo('101',1,start,path),start.isoformat())
-        self.assertEqual(path.read_bytes(),b'\xff\xd8\x00\xff\xd9')
+        self.assertTrue(path.read_bytes().startswith(b'\xff\xd8'))
+        self.assertTrue(path.read_bytes().endswith(b'\xff\xd9'))
+        self.assertEqual(sorted(p.name for p in self.state.iterdir()),['mock-stream.nut','photo.jpg'])
+
+    def test_snapshot_refuses_missing_timestamp_and_keeps_no_recording(self):
+        native=self.native();target=dt.datetime(2026,9,30,10,42,0)
+        with self.assertRaisesRegex(relay.RelayError,'PHOTO_FAILED'):
+            native.photo('101',1,target,self.state/'missing.jpg')
+        self.assertEqual([p.name for p in self.state.iterdir()],['mock-stream.nut'])
+
+    def test_playback_start_failure_is_reported_without_download(self):
+        native=self.native('photo-fail');target=dt.datetime(2026,9,30,10,41,38)
+        with self.assertRaisesRegex(relay.RelayError,'PHOTO_FAILED'):
+            native.photo('101',1,target,self.state/'failed.jpg')
+        self.assertEqual([p.name for p in self.state.iterdir()],['mock-stream.nut'])
 
     def test_query_rejects_continuous_record_in_motion_filter(self):
         native=self.native('wrong-type');start=dt.datetime(2026,9,30,10,41,38)

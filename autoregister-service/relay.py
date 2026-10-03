@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Persistent NetSDK relay. Credentials stay in the VPS config and native pipe."""
 import datetime as dt
+import base64
 import json
+import io
 import os
 import pathlib
 import queue
+import re
 import shutil
 import signal
 import struct
@@ -98,6 +101,38 @@ def trim_dav(dav, output, wanted_start, wanted_end):
         raise RelayError("VIDEO_INVALID")
     return measured
 
+def snapshot_in_memory(encoded,target,output):
+    """Decode only the requested frame; compressed playback never touches disk."""
+    try:
+        if not isinstance(encoded,str) or len(encoded)>22369624:
+            raise ValueError()
+        data=base64.b64decode(encoded,validate=True)
+        if not data or len(data)>16*1024*1024:raise ValueError()
+        epoch=target.replace(tzinfo=dt.timezone.utc).timestamp()
+        # DAV stores the DVR calendar in PTS; copyts preserves that calendar.
+        result=subprocess.run(['ffmpeg','-hide_banner','-loglevel','info','-threads','1',
+            '-copyts','-i','pipe:0','-map','0:v:0','-an',
+            '-vf',f'select=gte(t\\,{epoch})*lt(t\\,{epoch+1.001}),showinfo',
+            '-frames:v','1','-fps_mode','passthrough','-c:v','mjpeg','-threads','1',
+            '-f','image2pipe','pipe:1'],input=data,stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,timeout=20,check=False)
+        if result.returncode or not 4<=len(result.stdout)<=8*1024*1024:
+            raise ValueError()
+        if not result.stdout.startswith(b'\xff\xd8') or not result.stdout.endswith(b'\xff\xd9'):
+            raise ValueError()
+        # The input time base and integer PTS retain precision at epoch scale.
+        log=result.stderr.decode('utf-8',errors='replace')
+        scale=re.search(r'config in time_base:\s*(\d+)/(\d+)',log)
+        frame_pts=re.search(r'\bn:\s*0\s+pts:\s*(-?\d+)\s+pts_time:',log)
+        if not scale or not frame_pts:raise ValueError()
+        actual_epoch=int(frame_pts[1])*int(scale[1])/int(scale[2])
+        if not epoch<=actual_epoch<=epoch+1:raise ValueError()
+        actual=dt.datetime.fromtimestamp(actual_epoch,dt.timezone.utc).replace(tzinfo=None)
+        with output.open('xb') as photo:photo.write(result.stdout)
+        return actual.isoformat(timespec='seconds')
+    except (ValueError,TypeError,KeyError,ZeroDivisionError,OSError,subprocess.TimeoutExpired):
+        raise RelayError('PHOTO_FAILED') from None
+
 class Native:
     def __init__(self, config, state):
         self.online = set()
@@ -109,6 +144,7 @@ class Native:
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None,
             env={**os.environ, "LD_LIBRARY_PATH": str(pathlib.Path(config["sdk_so"]).parent)},
             bufsize=0)
+        self.proc.stdout=io.BufferedReader(self.proc.stdout)
         self.thread = threading.Thread(target=self.read, daemon=True)
         self.thread.start()
         for device in config["devices"]:
@@ -116,7 +152,12 @@ class Native:
         self.send(["start"])
 
     def read(self):
-        for raw in self.proc.stdout:
+        reader=self.proc.stdout
+        while True:
+            raw=reader.readline(24*1024*1024)
+            if not raw:break
+            if len(raw)>=24*1024*1024:
+                self.proc.terminate();break
             try:
                 event = json.loads(raw)
                 kind, ident = event["event"], event.get("device_id")
@@ -129,7 +170,7 @@ class Native:
                     self.online.discard(ident)
             if kind in ("listening", "online", "offline", "login_failed"):
                 print("SDK " + kind + (" id=" + ident if ident else ""), flush=True)
-            elif kind in ("download_complete", "download_failed", "query_complete", "photo_complete", "fatal"):
+            elif kind in ("download_complete", "download_failed", "query_complete", "photo_stream", "fatal"):
                 try:
                     self.responses.put_nowait(event)
                 except queue.Full:
@@ -193,7 +234,8 @@ class Native:
 
     def photo(self,ident,channel,target,output):
         start=target-dt.timedelta(seconds=2);end=target+dt.timedelta(seconds=3)
-        return self.command_result(['photo',ident,channel,start.isoformat(timespec='seconds'),end.isoformat(timespec='seconds'),str(output),target.isoformat(timespec='seconds')],'photo_complete',25)['recorded_at']
+        event=self.command_result(['photo',ident,channel,start.isoformat(timespec='seconds'),end.isoformat(timespec='seconds'),str(output),target.isoformat(timespec='seconds')],'photo_stream',25)
+        return snapshot_in_memory(event.get('data'),target,output)
 
     def close(self):
         if self.proc.poll() is None:

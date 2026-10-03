@@ -44,6 +44,7 @@ BOOL CLIENT_Logout(LLONG) {
 LLONG CLIENT_DownloadByTimeEx(LLONG, int channel, int, NET_TIME*, NET_TIME*, char* path,
                               fTimeDownLoadPosCallBack callback, LDWORD user,
                               fDataCallBack, LDWORD, void*) {
+    if(mode()=="photo-only") abort(); // Photos must never call the download API.
     if(channel!=0) abort(); // UI channel 1 must map to SDK channel 0.
     FILE* f=fopen(path,"wb"); if(!f) abort();
     if(mode()!="empty") fwrite("MOCK_DAV",1,8,f);
@@ -69,14 +70,14 @@ int CLIENT_FindNextFile(LLONG,NET_RECORDFILE_INFO* info) {
     return 1;
 }
 BOOL CLIENT_FindClose(LLONG) {return TRUE;}
-LLONG CLIENT_PlayBackByTimeEx(LLONG,int channel,NET_TIME* start,NET_TIME*,HWND,fDownLoadPosCallBack,LDWORD,fDataCallBack,LDWORD) {
-    if(channel!=0)abort();playTarget=*start;playTarget.dwSecond+=2;return 5;
-}
-BOOL CLIENT_GetPlayBackOsdTime(LLONG,NET_TIME* actual,NET_TIME*,NET_TIME*) {*actual=playTarget;return TRUE;}
-BOOL CLIENT_CapturePictureEx(LLONG,const char* path,NET_CAPTURE_FORMATS) {
-    if(mode()=="photo-fail")return FALSE;
-    FILE* f=fopen(path,"wb");if(!f)return FALSE;
-    unsigned char jpeg[]={255,216,0,255,217};fwrite(jpeg,1,sizeof(jpeg),f);fclose(f);return TRUE;
+LLONG CLIENT_PlayBackByTimeEx(LLONG,int channel,NET_TIME*,NET_TIME*,HWND window,fDownLoadPosCallBack progress,LDWORD posUser,fDataCallBack data,LDWORD dataUser) {
+    if(channel!=0||window||!data||!progress)abort();
+    if(mode()=="photo-fail")return 0;
+    const char* path=getenv("MOCK_STREAM_FILE");if(!path)abort();
+    FILE* f=fopen(path,"rb");if(!f)abort();
+    unsigned char block[1024];size_t size;
+    while((size=fread(block,1,sizeof(block),f)))data(5,0,block,size,dataUser);
+    fclose(f);progress(5,1,static_cast<DWORD>(-1),posUser);return 5;
 }
 BOOL CLIENT_StopPlayBack(LLONG){return TRUE;}
 }

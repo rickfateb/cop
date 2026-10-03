@@ -27,6 +27,37 @@ std::atomic<bool> cancelled{false};
 std::atomic<int> progress{0};
 std::atomic<LLONG> activeLogin{0};
 std::atomic<LDWORD> generation{0};
+std::atomic<LDWORD> photoGeneration{0};
+std::atomic<int> photoProgress{0};
+std::mutex photoMutex;
+std::vector<unsigned char> photoStream;
+constexpr size_t maxPhotoStream=16ULL*1024*1024;
+int onPhotoData(LLONG,DWORD type,BYTE* buffer,DWORD size,LDWORD user) {
+    if(type!=0||user!=photoGeneration.load()||!buffer) return 1;
+    std::lock_guard<std::mutex> lock(photoMutex);
+    if(user!=photoGeneration.load()) return 1;
+    if(size>maxPhotoStream-photoStream.size()) {photoProgress=-1;return 1;}
+    photoStream.insert(photoStream.end(),buffer,buffer+size);
+    return 1;
+}
+void onPhotoProgress(LLONG,DWORD,DWORD received,LDWORD user) {
+    if(user!=photoGeneration.load()) return;
+    if(received==static_cast<DWORD>(-1)&&photoProgress.load()!=-1) photoProgress=1;
+    if(received==static_cast<DWORD>(-2)) photoProgress=-1;
+}
+std::string base64(const std::vector<unsigned char>& bytes) {
+    static const char alphabet[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;out.reserve((bytes.size()+2)/3*4);
+    for(size_t i=0;i<bytes.size();i+=3) {
+        unsigned v=unsigned(bytes[i])<<16;
+        if(i+1<bytes.size()) v|=unsigned(bytes[i+1])<<8;
+        if(i+2<bytes.size()) v|=bytes[i+2];
+        out+=alphabet[(v>>18)&63];out+=alphabet[(v>>12)&63];
+        out+=i+1<bytes.size()?alphabet[(v>>6)&63]:'=';
+        out+=i+2<bytes.size()?alphabet[v&63]:'=';
+    }
+    return out;
+}
 std::mutex mutex;
 std::condition_variable changed;
 struct Endpoint { std::string ip; WORD port; };
@@ -165,8 +196,6 @@ int main(int argc,char** argv) {
         auto findNext=reinterpret_cast<decltype(&CLIENT_FindNextFile)>(dlsym(library,"CLIENT_FindNextFile"));
         findClose=reinterpret_cast<decltype(findClose)>(dlsym(library,"CLIENT_FindClose"));
         auto playTime=reinterpret_cast<decltype(&CLIENT_PlayBackByTimeEx)>(dlsym(library,"CLIENT_PlayBackByTimeEx"));
-        auto osdTime=reinterpret_cast<decltype(&CLIENT_GetPlayBackOsdTime)>(dlsym(library,"CLIENT_GetPlayBackOsdTime"));
-        auto capturePicture=reinterpret_cast<decltype(&CLIENT_CapturePictureEx)>(dlsym(library,"CLIENT_CapturePictureEx"));
         stopPlayback=reinterpret_cast<decltype(stopPlayback)>(dlsym(library,"CLIENT_StopPlayBack"));
         if(!init(onDisconnect,0)) throw std::runtime_error("SDK_INIT_FAILED");
         initialized=true;
@@ -229,33 +258,24 @@ int main(int argc,char** argv) {
                     std::cout<<"{\"event\":\"query_complete\",\"request_id\":"<<quote(request)<<",\"records\":["<<records.str()<<"]}"<<std::endl;continue;
                 }
                 if(job[0]=="photo") {
-                    if(!playTime||!osdTime||!capturePicture||!stopPlayback) throw std::runtime_error("PHOTO_UNSUPPORTED");
+                    if(!playTime||!stopPlayback) throw std::runtime_error("PHOTO_UNSUPPORTED");
                     if(duration<=0||duration>10) throw std::runtime_error("INVALID_INTERVAL");
                     auto target=parseTime(job[7]);auto targetSeconds=seconds(target);
                     if(targetSeconds<seconds(start)||targetSeconds>=seconds(end)) throw std::runtime_error("INVALID_TIME");
                     auto output=std::filesystem::weakly_canonical(job[6]);auto relative=output.lexically_relative(root);
                     if(relative.empty()||*relative.begin()==".."||output.extension()!=".jpg"||std::filesystem::exists(output)) throw std::runtime_error("INVALID_OUTPUT");
-                    auto partial=output.string()+".partial";if(std::filesystem::exists(partial)) throw std::runtime_error("OUTPUT_EXISTS");
-                    playback=playTime(d.login,channel-1,&start,&end,nullptr,nullptr,0,nullptr,0);
+                    {std::lock_guard<std::mutex> lock(photoMutex);photoStream.clear();}
+                    photoProgress=0;LDWORD current=++photoGeneration;
+                    // Linux has no playback window/decoder. Receive a bounded stream in RAM.
+                    playback=playTime(d.login,channel-1,&start,&end,nullptr,onPhotoProgress,current,onPhotoData,current);
                     if(!playback) throw std::runtime_error("PHOTO_FAILED");
-                    auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(15);bool captured=false;NET_TIME actual{};
-                    while(!cancelled&&std::chrono::steady_clock::now()<deadline) {
-                        NET_TIME osd{},a{},b{};
-                        if(osdTime(playback,&osd,&a,&b)&&seconds(osd)>=targetSeconds) {
-                            if(seconds(osd)>targetSeconds+1) break;
-                            if(capturePicture(playback,partial.c_str(),NET_CAPTURE_JPEG_70)) {
-                                if(osdTime(playback,&actual,&a,&b)&&seconds(actual)>=targetSeconds&&seconds(actual)<=targetSeconds+1) captured=true;
-                                break;
-                            }
-                        }
-                        usleep(20000);
-                    }
-                    stopPlayback(playback);playback=0;
-                    if(!captured||!std::filesystem::exists(partial)||std::filesystem::file_size(partial)<4||std::filesystem::file_size(partial)>8ULL*1024*1024) {std::filesystem::remove(partial);throw std::runtime_error("PHOTO_FAILED");}
-                    std::ifstream photo(partial,std::ios::binary);unsigned char marker[2];photo.read(reinterpret_cast<char*>(marker),2);
-                    if(marker[0]!=255||marker[1]!=216) {std::filesystem::remove(partial);throw std::runtime_error("PHOTO_FAILED");}
-                    std::filesystem::rename(partial,output);
-                    std::cout<<"{\"event\":\"photo_complete\",\"request_id\":"<<quote(request)<<",\"recorded_at\":"<<quote(timeText(actual))<<'}'<<std::endl;continue;
+                    auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(15);
+                    while(!cancelled&&!photoProgress&&std::chrono::steady_clock::now()<deadline) usleep(20000);
+                    stopPlayback(playback);playback=0;++photoGeneration;
+                    std::vector<unsigned char> bytes;
+                    {std::lock_guard<std::mutex> lock(photoMutex);bytes.swap(photoStream);}
+                    if(cancelled||photoProgress!=1||bytes.empty()) throw std::runtime_error("PHOTO_FAILED");
+                    std::cout<<"{\"event\":\"photo_stream\",\"request_id\":"<<quote(request)<<",\"data\":"<<quote(base64(bytes))<<'}'<<std::endl;continue;
                 }
                 if(duration<=0||duration>120) throw std::runtime_error("INVALID_INTERVAL");
                 auto output=std::filesystem::weakly_canonical(job[6]);
@@ -284,6 +304,7 @@ int main(int argc,char** argv) {
                 if(download) {stopDownload(download);download=0;}
                 if(playback&&stopPlayback) {stopPlayback(playback);playback=0;}
                 if(search&&findClose) {findClose(search);search=0;}
+                ++photoGeneration;{std::lock_guard<std::mutex> lock(photoMutex);photoStream.clear();}
                 activeLogin=0;++generation;emit("download_failed",id,request,e.what());
             }
         }
