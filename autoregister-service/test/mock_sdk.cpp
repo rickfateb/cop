@@ -62,7 +62,8 @@ LLONG CLIENT_FindFile(LLONG,int channel,int type,char*,NET_TIME* start,NET_TIME*
     return mode()=="query-fail"?0:4;
 }
 int CLIENT_FindNextFile(LLONG,NET_RECORDFILE_INFO* info) {
-    if(findCount++||mode()=="query-empty") return -1;
+    if(mode()=="query-next-fail") return -1;
+    if(findCount++||mode()=="query-empty") return 0;
     info->ch=0;info->starttime=queryStart;info->endtime=queryEnd;
     info->nRecordFileType=mode()=="wrong-type"?0:queryType==2?2:0;
     return 1;

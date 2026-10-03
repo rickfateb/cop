@@ -82,6 +82,11 @@ class NativeTests(unittest.TestCase):
         native=self.native('query-empty');start=dt.datetime(2026,9,30,10,41,38)
         self.assertEqual(native.query('101',1,start,start+dt.timedelta(seconds=30),'motion'),[])
 
+    def test_failed_next_record_does_not_complete_as_empty(self):
+        native=self.native('query-next-fail');start=dt.datetime(2026,9,30,10,41,38)
+        with self.assertRaisesRegex(relay.RelayError,'EVENT_QUERY_FAILED'):
+            native.query('101',1,start,start+dt.timedelta(seconds=30),'motion')
+
 class RelayTests(unittest.TestCase):
     def test_timezone_and_segment_limits(self):
         start=relay.local_time("2026-09-30T13:41:38Z")

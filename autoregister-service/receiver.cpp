@@ -213,7 +213,8 @@ int main(int argc,char** argv) {
                     std::ostringstream records;int count=0;auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(90);
                     while(!cancelled) {
                         NET_RECORDFILE_INFO info{};int result=findNext(search,&info);
-                        if(result==-1) break;
+                        // CLIENT_FindNextFile: 0 ends the search, 1 returns a record.
+                        if(result==0) break;
                         if(result!=1) throw std::runtime_error("EVENT_QUERY_FAILED");
                         if(count>=10000||std::chrono::steady_clock::now()>deadline) throw std::runtime_error("EVENT_QUERY_FAILED");
                         if(info.ch!=static_cast<unsigned>(channel-1)) throw std::runtime_error("EVENT_QUERY_FAILED");
