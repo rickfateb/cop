@@ -123,3 +123,33 @@ Mudanças na porta/diretório base exigem atualizar a configuração local e as
 permissões do serviço; não alteram automaticamente a rede ou o firewall do DVR.
 Os subdiretórios da unidade guardam os fragmentos temporários de recuperação;
 eles são criados na primeira tarefa. A mídia final continua guardada no COP.
+
+
+## Captura histórica por tipo e mídia
+
+Atualização já instalada usa `/etc/cop-sdk/config.json`; não execute `setup.py` de
+novo. Depois de atualizar o checkout para a versão publicada, execute como root:
+
+```sh
+python3 /opt/cop-sdk-pilot/autoregister-service/update.py
+systemctl status cop-sdk-relay --no-pager
+journalctl -u cop-sdk-relay -n 30 --no-pager
+```
+
+O atualizador compila antes de parar o serviço, troca o binário e reinicia, preservando
+credenciais, token, porta e diretórios. O binário anterior fica `.previous`; o código
+Python anterior pode ser restaurado pelo commit anterior antes de recompilar/reiniciar.
+Ele não configura firewall, DVR nem permissões novas.
+
+O protocolo de nove campos adiciona query e photo. A busca paginada usa FindFile/
+FindNextFile/FindClose, filtros 2 e 11, nunca alarmes genéricos. Fotos são snapshots
+JPEG do playback, validados pelo horário OSD, sem download DAV. A biblioteca precisa
+oferecer decodificação/captura de playback no ambiente Linux instalado; presença do
+símbolo por si só não homologa esse funcionamento. Sem suporte, retorna PHOTO_FAILED
+ou PHOTO_UNSUPPORTED. Não há fallback para gravação, foto ao vivo ou filtro diferente.
+
+Testes locais do protocolo usam o header real do SDK autorizado e biblioteca mock.
+Antes de considerar operacional, faça uma captura curta no canal 2 de Cerejeiras
+em um horário com movimento conhecido, confira JPEG e horário, e só então amplie o
+período. Uma busca vazia informa zero registros; não comprova que nunca houve movimento.
+A busca inteligente pode estar indisponível em modelos/firmwares sem esse recurso.

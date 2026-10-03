@@ -10,6 +10,8 @@ fDisConnect disconnectCallback=nullptr;
 fServiceCallBack registerCallback=nullptr;
 LDWORD registerUser=0;
 int downloads=0;
+NET_TIME queryStart{},queryEnd{},playTarget{};
+int queryType=0,findCount=0;
 }
 extern "C" {
 BOOL CLIENT_Init(fDisConnect callback, LDWORD) { disconnectCallback=callback; return TRUE; }
@@ -54,4 +56,26 @@ LLONG CLIENT_DownloadByTimeEx(LLONG, int channel, int, NET_TIME*, NET_TIME*, cha
     return 3;
 }
 BOOL CLIENT_StopDownload(LLONG) { return TRUE; }
+LLONG CLIENT_FindFile(LLONG,int channel,int type,char*,NET_TIME* start,NET_TIME* end,BOOL,int) {
+    if(channel!=0||(type!=2&&type!=11)) abort();
+    queryStart=*start;queryEnd=*end;queryType=type;findCount=0;
+    return mode()=="query-fail"?0:4;
+}
+int CLIENT_FindNextFile(LLONG,NET_RECORDFILE_INFO* info) {
+    if(findCount++||mode()=="query-empty") return -1;
+    info->ch=0;info->starttime=queryStart;info->endtime=queryEnd;
+    info->nRecordFileType=mode()=="wrong-type"?0:queryType==2?2:0;
+    return 1;
+}
+BOOL CLIENT_FindClose(LLONG) {return TRUE;}
+LLONG CLIENT_PlayBackByTimeEx(LLONG,int channel,NET_TIME* start,NET_TIME*,HWND,fDownLoadPosCallBack,LDWORD,fDataCallBack,LDWORD) {
+    if(channel!=0)abort();playTarget=*start;playTarget.dwSecond+=2;return 5;
+}
+BOOL CLIENT_GetPlayBackOsdTime(LLONG,NET_TIME* actual,NET_TIME*,NET_TIME*) {*actual=playTarget;return TRUE;}
+BOOL CLIENT_CapturePictureEx(LLONG,const char* path,NET_CAPTURE_FORMATS) {
+    if(mode()=="photo-fail")return FALSE;
+    FILE* f=fopen(path,"wb");if(!f)return FALSE;
+    unsigned char jpeg[]={255,216,0,255,217};fwrite(jpeg,1,sizeof(jpeg),f);fclose(f);return TRUE;
+}
+BOOL CLIENT_StopPlayBack(LLONG){return TRUE;}
 }

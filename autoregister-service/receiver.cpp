@@ -7,6 +7,9 @@
 #include <deque>
 #include <dlfcn.h>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -118,16 +121,21 @@ time_t seconds(const NET_TIME& t) {
     tm v{};v.tm_year=t.dwYear-1900;v.tm_mon=t.dwMonth-1;v.tm_mday=t.dwDay;v.tm_hour=t.dwHour;v.tm_min=t.dwMinute;v.tm_sec=t.dwSecond;
     return timegm(&v);
 }
+std::string timeText(const NET_TIME& t) {
+    std::ostringstream out;out<<std::setfill('0')<<std::setw(4)<<t.dwYear<<'-'<<std::setw(2)<<t.dwMonth<<'-'<<std::setw(2)<<t.dwDay<<'T'<<std::setw(2)<<t.dwHour<<':'<<std::setw(2)<<t.dwMinute<<':'<<std::setw(2)<<t.dwSecond;return out.str();
+}
 struct Device { std::string user,password; LLONG login=0; int channels=0; };
 }
 int main(int argc,char** argv) {
     if(argc!=5) { std::cerr<<"Usage: receiver SDK_SO BIND PORT OUTPUT_ROOT\n";return 2; }
     std::signal(SIGTERM,signalHandler);std::signal(SIGINT,signalHandler);
-    void* library=nullptr; bool initialized=false;LLONG listener=0,download=0;
+    void* library=nullptr; bool initialized=false;LLONG listener=0,download=0,playback=0,search=0;
     decltype(&CLIENT_Cleanup) cleanup=nullptr;
     decltype(&CLIENT_StopListenServer) stopListen=nullptr;
     decltype(&CLIENT_StopDownload) stopDownload=nullptr;
     decltype(&CLIENT_Logout) logout=nullptr;
+    decltype(&CLIENT_StopPlayBack) stopPlayback=nullptr;
+    decltype(&CLIENT_FindClose) findClose=nullptr;
     std::map<std::string,Device> devices;
     std::thread input;
     int result=1;
@@ -152,6 +160,14 @@ int main(int argc,char** argv) {
         logout=symbol<decltype(logout)>(library,"CLIENT_Logout");
         auto downloadTime=symbol<decltype(&CLIENT_DownloadByTimeEx)>(library,"CLIENT_DownloadByTimeEx");
         stopDownload=symbol<decltype(stopDownload)>(library,"CLIENT_StopDownload");
+        // Optional historical interfaces: old playback remains usable if absent.
+        auto findFile=reinterpret_cast<decltype(&CLIENT_FindFile)>(dlsym(library,"CLIENT_FindFile"));
+        auto findNext=reinterpret_cast<decltype(&CLIENT_FindNextFile)>(dlsym(library,"CLIENT_FindNextFile"));
+        findClose=reinterpret_cast<decltype(findClose)>(dlsym(library,"CLIENT_FindClose"));
+        auto playTime=reinterpret_cast<decltype(&CLIENT_PlayBackByTimeEx)>(dlsym(library,"CLIENT_PlayBackByTimeEx"));
+        auto osdTime=reinterpret_cast<decltype(&CLIENT_GetPlayBackOsdTime)>(dlsym(library,"CLIENT_GetPlayBackOsdTime"));
+        auto capturePicture=reinterpret_cast<decltype(&CLIENT_CapturePictureEx)>(dlsym(library,"CLIENT_CapturePictureEx"));
+        stopPlayback=reinterpret_cast<decltype(stopPlayback)>(dlsym(library,"CLIENT_StopPlayBack"));
         if(!init(onDisconnect,0)) throw std::runtime_error("SDK_INIT_FAILED");
         initialized=true;
         listener=listen(argv[2],static_cast<WORD>(port),1000,onRegister,0);
@@ -180,7 +196,7 @@ int main(int argc,char** argv) {
             if(job.empty()) continue;
             const auto& request=job[1]; const auto& id=job[2];
             try {
-                if(job[0]!="download") throw std::runtime_error("INVALID_COMMAND");
+                if(job[0]!="download"&&job[0]!="query"&&job[0]!="photo") throw std::runtime_error("INVALID_COMMAND");
                 auto found=devices.find(id);
                 if(found==devices.end()||!found->second.login) throw std::runtime_error("DVR_OFFLINE");
                 auto& d=found->second;
@@ -188,6 +204,58 @@ int main(int argc,char** argv) {
                 if(channel<1||channel>d.channels) throw std::runtime_error("INVALID_CHANNEL");
                 auto start=parseTime(job[4]),end=parseTime(job[5]);
                 auto duration=seconds(end)-seconds(start);
+                if(job[0]=="query") {
+                    if(!findFile||!findNext||!findClose) throw std::runtime_error("EVENT_QUERY_UNSUPPORTED");
+                    int type=job[7]=="motion"?EM_RECORD_TYPE_MOTION_DETECT:job[7]=="ai"?EM_RECORD_TYPE_INTELLI_VIDEO:-1;
+                    if(type<0||duration<=0||duration>10800) throw std::runtime_error("INVALID_INTERVAL");
+                    search=findFile(d.login,channel-1,type,nullptr,&start,&end,FALSE,5000);
+                    if(!search) throw std::runtime_error("EVENT_QUERY_FAILED");
+                    std::ostringstream records;int count=0;auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(90);
+                    while(!cancelled) {
+                        NET_RECORDFILE_INFO info{};int result=findNext(search,&info);
+                        if(result==-1) break;
+                        if(result!=1) throw std::runtime_error("EVENT_QUERY_FAILED");
+                        if(count>=10000||std::chrono::steady_clock::now()>deadline) throw std::runtime_error("EVENT_QUERY_FAILED");
+                        if(info.ch!=static_cast<unsigned>(channel-1)) throw std::runtime_error("EVENT_QUERY_FAILED");
+                        if(type==EM_RECORD_TYPE_MOTION_DETECT&&info.nRecordFileType!=2) throw std::runtime_error("EVENT_QUERY_FAILED");
+                        parseTime(timeText(info.starttime));parseTime(timeText(info.endtime));
+                        if(seconds(info.endtime)<=seconds(info.starttime)) throw std::runtime_error("EVENT_QUERY_FAILED");
+                        if(count++) records<<',';
+                        records<<"{\"start\":"<<quote(timeText(info.starttime))<<",\"end\":"<<quote(timeText(info.endtime))<<",\"type\":"<<quote(job[7])<<'}';
+                    }
+                    if(cancelled) throw std::runtime_error("EVENT_QUERY_FAILED");
+                    findClose(search);search=0;
+                    std::cout<<"{\"event\":\"query_complete\",\"request_id\":"<<quote(request)<<",\"records\":["<<records.str()<<"]}"<<std::endl;continue;
+                }
+                if(job[0]=="photo") {
+                    if(!playTime||!osdTime||!capturePicture||!stopPlayback) throw std::runtime_error("PHOTO_UNSUPPORTED");
+                    if(duration<=0||duration>10) throw std::runtime_error("INVALID_INTERVAL");
+                    auto target=parseTime(job[7]);auto targetSeconds=seconds(target);
+                    if(targetSeconds<seconds(start)||targetSeconds>=seconds(end)) throw std::runtime_error("INVALID_TIME");
+                    auto output=std::filesystem::weakly_canonical(job[6]);auto relative=output.lexically_relative(root);
+                    if(relative.empty()||*relative.begin()==".."||output.extension()!=".jpg"||std::filesystem::exists(output)) throw std::runtime_error("INVALID_OUTPUT");
+                    auto partial=output.string()+".partial";if(std::filesystem::exists(partial)) throw std::runtime_error("OUTPUT_EXISTS");
+                    playback=playTime(d.login,channel-1,&start,&end,nullptr,nullptr,0,nullptr,0);
+                    if(!playback) throw std::runtime_error("PHOTO_FAILED");
+                    auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(15);bool captured=false;NET_TIME actual{};
+                    while(!cancelled&&std::chrono::steady_clock::now()<deadline) {
+                        NET_TIME osd{},a{},b{};
+                        if(osdTime(playback,&osd,&a,&b)&&seconds(osd)>=targetSeconds) {
+                            if(seconds(osd)>targetSeconds+1) break;
+                            if(capturePicture(playback,partial.c_str(),NET_CAPTURE_JPEG_70)) {
+                                if(osdTime(playback,&actual,&a,&b)&&seconds(actual)>=targetSeconds&&seconds(actual)<=targetSeconds+1) captured=true;
+                                break;
+                            }
+                        }
+                        usleep(20000);
+                    }
+                    stopPlayback(playback);playback=0;
+                    if(!captured||!std::filesystem::exists(partial)||std::filesystem::file_size(partial)<4||std::filesystem::file_size(partial)>8ULL*1024*1024) {std::filesystem::remove(partial);throw std::runtime_error("PHOTO_FAILED");}
+                    std::ifstream photo(partial,std::ios::binary);unsigned char marker[2];photo.read(reinterpret_cast<char*>(marker),2);
+                    if(marker[0]!=255||marker[1]!=216) {std::filesystem::remove(partial);throw std::runtime_error("PHOTO_FAILED");}
+                    std::filesystem::rename(partial,output);
+                    std::cout<<"{\"event\":\"photo_complete\",\"request_id\":"<<quote(request)<<",\"recorded_at\":"<<quote(timeText(actual))<<'}'<<std::endl;continue;
+                }
                 if(duration<=0||duration>120) throw std::runtime_error("INVALID_INTERVAL");
                 auto output=std::filesystem::weakly_canonical(job[6]);
                 auto relative=output.lexically_relative(root);
@@ -213,6 +281,8 @@ int main(int argc,char** argv) {
                 std::filesystem::rename(partial,output);emit("download_complete",id,request);
             } catch(const std::exception& e) {
                 if(download) {stopDownload(download);download=0;}
+                if(playback&&stopPlayback) {stopPlayback(playback);playback=0;}
+                if(search&&findClose) {findClose(search);search=0;}
                 activeLogin=0;++generation;emit("download_failed",id,request,e.what());
             }
         }
@@ -221,6 +291,8 @@ int main(int argc,char** argv) {
     cancelled=true;
     if(input.joinable()) input.join();
     if(download&&stopDownload) stopDownload(download);
+    if(playback&&stopPlayback) stopPlayback(playback);
+    if(search&&findClose) findClose(search);
     for(auto& item:devices) {
         if(item.second.login&&logout) logout(item.second.login);
         std::fill(item.second.password.begin(),item.second.password.end(),'\0');

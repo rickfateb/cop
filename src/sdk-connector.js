@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { tokenHash, decryptSecret } from './infrastructure.js';
 import { storePlayback } from './investigation-worker.js';
+import {claimCaptureJob,captureAction} from './capture-connector.js';
 
 const fail=(message,status=400)=>Object.assign(Error(message),{status});
 export function connectorAuthorized(expected,value) {
@@ -141,7 +142,10 @@ export function createSdkApi({pool,json,readJson,token=process.env.COP_SDK_CONNE
    const devices=(await pool.query("SELECT autoregister_id,access_username,access_password_cipher FROM cop_dvrs WHERE server_id=$1 AND active=TRUE AND playback_mode='netsdk_autoregister' AND autoregister_id IS NOT NULL AND access_password_cipher IS NOT NULL ORDER BY id LIMIT 64",[server.id])).rows;
    return json(res,200,{connector_name:server.connector_name,state_dir:server.storage_root,port:server.registration_port,devices:devices.map(d=>({id:d.autoregister_id,username:d.access_username||'admin',password:decryptSecret(d.access_password_cipher)}))});
   }
-  if(url.pathname==='/api/sdk/claim')return json(res,200,{job:await claimSdkJob(pool,scopedIdentity(await readJson(req)),server?.id||null)});
+  if(url.pathname==='/api/sdk/claim'){
+   const body=scopedIdentity(await readJson(req));
+   return json(res,200,{job:await claimSdkJob(pool,body,server?.id||null)||await claimCaptureJob(pool,body,server?.id||null)});
+  }
   if(url.pathname==='/api/sdk/heartbeat'){
    const body=scopedIdentity(await readJson(req)),{name,ids}=connectorIdentity(body);
    const online=body.online_ids;
@@ -150,6 +154,21 @@ export function createSdkApi({pool,json,readJson,token=process.env.COP_SDK_CONNE
     sdk_last_seen_at=CASE WHEN autoregister_id=ANY($3::text[]) THEN now() ELSE sdk_last_seen_at END
     WHERE sdk_connector_name=$1 AND autoregister_id=ANY($2::text[]) AND server_id IS NOT DISTINCT FROM $4::bigint`,[name,ids,online,server?.id||null]);
    return json(res,200,{ok:true});
+  }
+  const capture=url.pathname.match(/^\/api\/sdk\/captures\/([1-9]\d*)\/([1-9]\d*)\/(renew|failure|media|complete)$/);
+  if(capture){
+   const [,id,cam,action]=capture,lease=req.headers['x-cop-lease-token'];
+   const options={};
+   if(action==='media'){
+    const raw=req.headers['x-cop-capture-metadata'];
+    if(typeof raw!=='string'||raw.length>4096)throw fail('Metadados da captura inválidos.');
+    try{options.metadata=JSON.parse(decodeURIComponent(raw));}catch{throw fail('Metadados da captura inválidos.');}
+    if(!options.metadata||options.metadata.content_type!==req.headers['content-type'])throw fail('Tipo da mídia inválido.');
+    const chunks=[];let total=0;const limit=req.headers['content-type']==='image/jpeg'?8*1024*1024:256*1024*1024;
+    for await(const chunk of req){total+=chunk.length;if(total>limit)throw fail('Mídia acima do limite.',413);chunks.push(chunk);}
+    options.data=Buffer.concat(chunks,total);
+   }else options.body=await readJson(req);
+   return json(res,200,await captureAction(pool,id,cam,lease,server?.id||null,action,options));
   }
   const match=url.pathname.match(/^\/api\/sdk\/jobs\/([1-9]\d*)\/([1-9]\d*)\/(renew|failure|complete)$/);
   if(!match)return json(res,404,{error:'Rota SDK não encontrada.'});

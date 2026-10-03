@@ -63,6 +63,25 @@ class NativeTests(unittest.TestCase):
             self.download(native,"existing.dav")
         self.assertEqual(target.read_bytes(),b"existing")
 
+    def test_motion_smart_query_and_snapshot_without_download(self):
+        native=self.native();start=dt.datetime(2026,9,30,10,41,38)
+        for mode in ('motion','ai'):
+            records=native.query('101',1,start,start+dt.timedelta(seconds=30),mode)
+            self.assertEqual(records[0]['type'],mode)
+            self.assertEqual(records[0]['start'],start.isoformat())
+        path=self.state/'photo.jpg'
+        self.assertEqual(native.photo('101',1,start,path),start.isoformat())
+        self.assertEqual(path.read_bytes(),b'\xff\xd8\x00\xff\xd9')
+
+    def test_query_rejects_continuous_record_in_motion_filter(self):
+        native=self.native('wrong-type');start=dt.datetime(2026,9,30,10,41,38)
+        with self.assertRaisesRegex(relay.RelayError,'EVENT_QUERY_FAILED'):
+            native.query('101',1,start,start+dt.timedelta(seconds=30),'motion')
+
+    def test_empty_event_query_is_not_a_continuous_fallback(self):
+        native=self.native('query-empty');start=dt.datetime(2026,9,30,10,41,38)
+        self.assertEqual(native.query('101',1,start,start+dt.timedelta(seconds=30),'motion'),[])
+
 class RelayTests(unittest.TestCase):
     def test_timezone_and_segment_limits(self):
         start=relay.local_time("2026-09-30T13:41:38Z")

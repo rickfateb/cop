@@ -15,13 +15,14 @@ test('capture validates dates, timezone, channels and all type/media combination
   for(const patch of [{end_at:input.start_at},{start_at:'2026-02-30T00:00:00Z'},{start_at:'2026-09-10T00:00:00'},{channels:[]},{channels:[33]},{capture_mode:'unknown'},{media_type:'unknown'}])assert.throws(()=>validateCapture({...input,...patch}),e=>e.status===400);
   assert.deepEqual(validateCapture({...input,channels:[4,2,2]}).channels,[2,4]);
 });
-test('photos, motion and AI requests cannot be converted into continuous video downloads',()=>{
+test('SDK captures all combinations in its own queue; direct RTSP keeps its narrower scope',()=>{
   const dvr={playback_mode:'netsdk_autoregister'};
   for(const mode of ['continuous','motion','ai'])for(const mediaType of ['photo','video','all']){
     const request={...validateCapture({...input,capture_mode:mode,media_type:mediaType}),end:'2026-09-10T03:10:00Z'};
-    assert.equal(capturePlan(request,dvr).supported,mode==='continuous'&&mediaType==='video');
+    assert.equal(capturePlan(request,dvr).supported,true);
+    assert.equal(capturePlan(request,{playback_mode:'rtsp_direct'}).supported,mode==='continuous'&&mediaType==='video');
   }
-  assert.equal(capturePlan(validateCapture({...input,capture_mode:'continuous',media_type:'video'}),dvr).supported,false);
+  assert.equal(capturePlan(validateCapture({...input,capture_mode:'continuous',media_type:'video'}),dvr).supported,true);
   assert.equal(capturePlan({...validateCapture(input),mode:'continuous',mediaType:'video',end:'2099-09-10T03:10:00Z'},dvr).supported,false);
 });
 test('capture screen keeps Sao Paulo dates even for clients in other timezones',()=>{
@@ -45,7 +46,7 @@ export async function checkCaptureDatabase(pool) {
   await assert.rejects(()=>createCapture(pool,{...request,unit_id:9999}),e=>e.status===400);
   for(const capture_mode of ['continuous','motion','ai'])for(const media_type of ['photo','video','all']){
     const saved=await createCapture(pool,{...request,capture_mode,media_type});
-    assert.equal(saved.status,'waiting_connector');assert.equal(saved.investigation_id,null);
+    assert.equal(saved.status,'queued');assert.equal(saved.investigation_id,null);
   }
   assert.equal(await claimSdkJob(pool,{connector_name:'hostinger',device_ids:['101']}),null);
   assert.equal((await pool.query('SELECT count(*)::int n FROM cop_investigations')).rows[0].n,0);

@@ -103,10 +103,26 @@ COP. Apenas movimento exige eventos detectados pelo DVR; não usa inferência vi
 como substituição. Foto não baixa vídeos para extrair quadros. Todos exige ambas
 as mídias, sem reduzir automaticamente o pedido a vídeo.
 
-O receptor atual executa somente Modo Contínuo + Vídeo, período passado de até
-120 minutos, em DVR com RTSP direto ou SDK Auto Registro configurado. Esses pedidos
-criam uma investigação na mesma transação e acompanham seu status. Demais combinações
-são salvas como **Aguardando conector**, com a limitação explicitada na tela. Ainda
-não existe um consumidor para esses pedidos: sua execução exige atualização do
-receptor para a mídia/evento/período solicitado. Nenhuma foto histórica, detecção de
-movimento/IA ou busca de vários dias é anunciada como executada por esse formulário.
+O receptor atualizado (`autoregister-service`) anuncia `historical_capture_v1` e
+consome todas as combinações via fila própria. O receptor antigo continua recebendo
+somente as investigações de vídeo compatíveis. Fotos/Todos são divididos em lotes de
+10 minutos e Vídeo em lotes de até 120 minutos, com cursor persistente por canal.
+Períodos futuros aguardam seu término. Movimento usa `EM_RECORD_TYPE_MOTION_DETECT`
+(tipo 2); IA usa `EM_RECORD_TYPE_INTELLI_VIDEO` (tipo 11). Não há fallback para
+contínuo ou alarmes genéricos. As marcações são intervalos de gravação retornados pelo
+DVR e podem incluir a pré/pós-gravação configurada nele, sem representar necessariamente
+cada instante exato de atividade física. Firmware/armazenamento precisam suportar a busca.
+
+Fotos usam playback + `CLIENT_CapturePictureEx` em JPEG, com horário OSD validado
+(tolerância máxima de 1 segundo) e sem `CLIENT_DownloadByTimeEx`. Não usam captura
+ao vivo em substituição. Movimento/IA usam offsets, duração mínima e cooldown da
+política copiada; contínuo usa `frame_interval_seconds` do canal. Todos exige fotos
+e vídeos; falha de uma modalidade não é ocultada. Vídeos são divididos em partes
+úteis de até 116 segundos, preservando o corte já homologado por timestamps DAV.
+Fotos não disparam análise IA. Erros de recurso indisponível mantêm a mídia já
+recebida e não anunciam homologação do equipamento.
+
+A fila renova reservas, limita tentativas e deduplica por captura/canal/tipo/horário.
+Limites por lote: 1.500 arquivos e 256 MiB; JPEG de até 8 MiB. A listagem mostra
+progresso, contadores e mídia paginada pelo botão Mais mídias. A retenção permanece
+15 dias, com arquivamento Drive já existente. O SDK proprietário não entra no GitHub.

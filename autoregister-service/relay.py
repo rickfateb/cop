@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from zoneinfo import ZoneInfo
+import historical
 
 MAX_BYTES = 256 * 1024 * 1024
 
@@ -128,7 +129,7 @@ class Native:
                     self.online.discard(ident)
             if kind in ("listening", "online", "offline", "login_failed"):
                 print("SDK " + kind + (" id=" + ident if ident else ""), flush=True)
-            elif kind in ("download_complete", "download_failed", "fatal"):
+            elif kind in ("download_complete", "download_failed", "query_complete", "photo_complete", "fatal"):
                 try:
                     self.responses.put_nowait(event)
                 except queue.Full:
@@ -170,6 +171,29 @@ class Native:
     def online_ids(self):
         with self.lock:
             return sorted(self.online)
+
+    def command_result(self,fields,expected,timeout):
+        request=uuid.uuid4().hex
+        self.send([fields[0],request,*fields[1:]])
+        deadline=time.monotonic()+timeout
+        while time.monotonic()<deadline:
+            try:
+                event=self.responses.get(timeout=1)
+            except queue.Empty:
+                if self.proc.poll() is not None:raise RelayError('NATIVE_EXITED')
+                continue
+            if event.get('event')=='fatal':raise RelayError('NATIVE_EXITED')
+            if event.get('request_id')!=request:continue
+            if event['event']==expected:return event
+            raise RelayError(event.get('error') or 'RELAY_FAILED')
+        raise RelayError('NATIVE_EXITED')
+
+    def query(self,ident,channel,start,end,mode):
+        return self.command_result(['query',ident,channel,start.isoformat(timespec='seconds'),end.isoformat(timespec='seconds'),'',mode],'query_complete',100)['records']
+
+    def photo(self,ident,channel,target,output):
+        start=target-dt.timedelta(seconds=2);end=target+dt.timedelta(seconds=3)
+        return self.command_result(['photo',ident,channel,start.isoformat(timespec='seconds'),end.isoformat(timespec='seconds'),str(output),target.isoformat(timespec='seconds')],'photo_complete',25)['recorded_at']
 
     def close(self):
         if self.proc.poll() is None:
@@ -232,13 +256,16 @@ class Relay:
         self.active_lock = threading.Lock()
         self.lease_lost = threading.Event()
 
-    def api(self, path, body=None, lease=None, payload=None, duration=None):
+    def api(self, path, body=None, lease=None, payload=None, duration=None, metadata=None):
         headers = {"X-Cop-Sdk-Token": self.config["connector_token"]}
         if lease:
             headers["X-Cop-Lease-Token"] = lease
         if payload is not None:
             data = payload
-            headers.update({"Content-Type": "video/mp4", "X-Video-Duration-Seconds": str(duration)})
+            if metadata is not None:
+                headers.update({'Content-Type':metadata['content_type'],'X-Cop-Capture-Metadata':urllib.parse.quote(json.dumps(metadata,separators=(',',':')))})
+            else:
+                headers.update({"Content-Type": "video/mp4", "X-Video-Duration-Seconds": str(duration)})
         else:
             data = json.dumps(body or {}).encode()
             headers["Content-Type"] = "application/json"
@@ -253,6 +280,8 @@ class Relay:
 
     @staticmethod
     def job_path(job, action):
+        if job.get('kind')=='capture':
+            return '/api/sdk/captures/{}/{}/{}'.format(job['capture_id'],job['camera_id'],action)
         return "/api/sdk/jobs/{}/{}/{}".format(job["investigation_id"], job["camera_id"], action)
 
     def heartbeat(self):
@@ -275,6 +304,8 @@ class Relay:
             self.stop.wait(30)
 
     def process(self, job):
+        if job.get('kind')=='capture':
+            return self.process_capture(job)
         self.lease_lost.clear()
         with self.active_lock:
             self.active = job
@@ -347,6 +378,49 @@ class Relay:
             if directory is not None:
                 shutil.rmtree(directory, ignore_errors=True)
 
+    def process_capture(self,job):
+        self.lease_lost.clear()
+        with self.active_lock:self.active=job
+        directory=None
+        try:
+            directory=job_directory(self.state,job.get('directory_name'))
+            total=0
+            def check():
+                if self.stop.is_set() or self.lease_lost.is_set():raise RelayError('LEASE_LOST')
+            def upload(path,meta):
+                nonlocal total
+                check();size=path.stat().st_size;total+=size
+                if size>MAX_BYTES or total>MAX_BYTES:raise RelayError('TOO_LARGE')
+                self.api(self.job_path(job,'renew'),lease=job['lease_token'])
+                data=path.read_bytes()
+                for attempt in range(3):
+                    try:
+                        self.api(self.job_path(job,'media'),lease=job['lease_token'],payload=data,metadata=meta)
+                        return
+                    except urllib.error.HTTPError as error:
+                        if error.code<500 or attempt==2:raise
+                    except (urllib.error.URLError,TimeoutError):
+                        if attempt==2:raise
+                    self.stop.wait(5)
+            def video(begin,finish,path):
+                check();dav=path.with_suffix('.dav')
+                self.native.download(job['device_id'],job['channel'],begin-dt.timedelta(seconds=2),finish+dt.timedelta(seconds=2),dav)
+                duration=trim_dav(dav,path,begin,finish);dav.unlink()
+                return duration
+            counters=historical.process(job,self.native,directory,upload,check,video)
+            check()
+            self.api(self.job_path(job,'complete'),counters,lease=job['lease_token'])
+            print('COP captura lote pronto id={} canal={} midias={}'.format(job['capture_id'],job['channel'],counters['media_count']),flush=True)
+        except Exception as error:
+            code=str(error) if isinstance(error,(RelayError,historical.CaptureError)) else 'RELAY_FAILED'
+            print('COP captura falhou codigo='+code,flush=True)
+            try:self.api(self.job_path(job,'failure'),{'code':code},lease=job['lease_token'])
+            except Exception:pass
+            if code=='NATIVE_EXITED':raise
+        finally:
+            with self.active_lock:self.active=None
+            if directory is not None:shutil.rmtree(directory,ignore_errors=True)
+
     def run(self):
         threading.Thread(target=self.heartbeat, daemon=True).start()
         try:
@@ -367,7 +441,7 @@ class Relay:
                 if self.native.proc.poll() is not None:
                     raise RelayError("NATIVE_EXITED")
                 try:
-                    job = self.api("/api/sdk/claim", {**self.identity(), "device_ids": self.native.online_ids()})["job"]
+                    job = self.api("/api/sdk/claim", {**self.identity(), "device_ids": self.native.online_ids(),"capabilities":["historical_capture_v1"]})["job"]
                     if job:
                         self.process(job)
                         continue

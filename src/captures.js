@@ -30,6 +30,8 @@ export function validateCapture(body) {
   return {unitId, dvrId, start, end, channels, mode: body.capture_mode, mediaType: body.media_type};
 }
 export function capturePlan(request, dvr, now = new Date()) {
+  if (dvr.playback_mode === 'netsdk_autoregister') return {supported: new Date(request.end)<=now,
+    reason:new Date(request.end)<=now ? null : 'Aguardando o término do período solicitado.'};
   if (request.mode !== 'continuous') return {supported: false, reason: request.mode === 'motion'
     ? 'Aguardando suporte do receptor à consulta dos eventos históricos de movimento detectados pelo DVR.'
     : 'Aguardando suporte do receptor à consulta dos eventos históricos de IA registrados pelo DVR.'};
@@ -52,7 +54,7 @@ export async function createCapture(pool, body, actor = 'admin') {
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [request.unitId, dvr.id, request.start, request.end, request.mode, request.mediaType, plan.supported ? 'queued' : 'waiting_connector', plan.reason, actor])).rows[0];
     for (const camera of cameras) await client.query(`INSERT INTO cop_capture_channels(capture_id,camera_id,channel,sampling_config)
       VALUES($1,$2,$3,$4)`, [saved.id, camera.id, camera.channel, JSON.stringify({policy: camera.policy, device_config: camera.device_config})]);
-    if (plan.supported) {
+    if (plan.supported && request.mode==='continuous' && request.mediaType==='video' && new Date(request.end)-new Date(request.start)<=7200000) {
       const seconds = Math.ceil((new Date(request.end) - new Date(request.start)) / 1000);
       const before = Math.floor(seconds / 2), after = seconds - before;
       const reference = new Date(+new Date(request.start) + before * 1000);
@@ -75,10 +77,17 @@ export async function listCaptures(pool, {limit = 100} = {}) {
     LEFT JOIN cop_investigations i ON i.id=r.investigation_id
     ORDER BY r.created_at DESC,r.id DESC LIMIT $1`, [Math.min(100, Math.max(1, Math.trunc(Number(limit)) || 100))])).rows;
   if (!rows.length) return [];
-  const channels = (await pool.query(`SELECT cc.*,c.name camera_name,ic.status,ic.last_error,ic.retrieved_media_id
+  const channels = (await pool.query(`SELECT cc.*,c.name camera_name,COALESCE(ic.status,cc.status) status,COALESCE(ic.last_error,cc.last_error) last_error,ic.retrieved_media_id,
+    (SELECT count(*)::int FROM cop_capture_media cm WHERE cm.capture_id=cc.capture_id AND cm.camera_id=cc.camera_id) media_count,
+    (SELECT COALESCE(jsonb_agg(m), '[]'::jsonb) FROM (SELECT cm.media_id,me.content_type,me.recorded_at FROM cop_capture_media cm JOIN cop_media me ON me.id=cm.media_id
+      WHERE cm.capture_id=cc.capture_id AND cm.camera_id=cc.camera_id ORDER BY me.recorded_at LIMIT 20) m) media
     FROM cop_capture_channels cc JOIN cop_cameras c ON c.id=cc.camera_id
     JOIN cop_capture_requests r ON r.id=cc.capture_id
     LEFT JOIN cop_investigation_channels ic ON ic.investigation_id=r.investigation_id AND ic.camera_id=cc.camera_id
     WHERE cc.capture_id=ANY($1::bigint[]) ORDER BY cc.capture_id,cc.channel`, [rows.map(row => row.id)])).rows;
   return rows.map(row => ({...row, channels: channels.filter(channel => String(channel.capture_id) === String(row.id))}));
+}
+export async function listCaptureMedia(pool,id,cameraId,offset=0){
+  return (await pool.query(`SELECT cm.media_id,m.content_type,m.recorded_at FROM cop_capture_media cm JOIN cop_media m ON m.id=cm.media_id
+    WHERE cm.capture_id=$1 AND cm.camera_id=$2 ORDER BY m.recorded_at,cm.media_id LIMIT 21 OFFSET $3`,[id,cameraId,Math.max(0,Math.min(10000000,Math.trunc(Number(offset))||0))])).rows;
 }

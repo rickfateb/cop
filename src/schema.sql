@@ -238,6 +238,31 @@ CREATE TABLE IF NOT EXISTS cop_capture_channels (
 );
 CREATE INDEX IF NOT EXISTS cop_capture_requests_created_idx ON cop_capture_requests(created_at DESC,id DESC);
 
+ALTER TABLE cop_capture_requests DROP CONSTRAINT IF EXISTS cop_capture_requests_status_check;
+ALTER TABLE cop_capture_requests ADD CONSTRAINT cop_capture_requests_status_check
+ CHECK(status IN ('queued','waiting_connector','retrieving','ready','partial','failed','cancelled'));
+ALTER TABLE cop_capture_channels ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'waiting_connector'
+ CHECK(status IN ('queued','waiting_connector','retrieving','ready','failed'));
+ALTER TABLE cop_capture_channels ADD COLUMN IF NOT EXISTS cursor_at TIMESTAMPTZ;
+ALTER TABLE cop_capture_channels ADD COLUMN IF NOT EXISTS lease_token TEXT;
+ALTER TABLE cop_capture_channels ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ;
+ALTER TABLE cop_capture_channels ADD COLUMN IF NOT EXISTS batch_start_at TIMESTAMPTZ;
+ALTER TABLE cop_capture_channels ADD COLUMN IF NOT EXISTS batch_end_at TIMESTAMPTZ;
+ALTER TABLE cop_capture_channels ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE cop_capture_channels ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE cop_capture_channels ADD COLUMN IF NOT EXISTS last_error TEXT;
+ALTER TABLE cop_capture_channels ADD COLUMN IF NOT EXISTS last_completed_lease TEXT;
+ALTER TABLE cop_capture_channels ADD COLUMN IF NOT EXISTS events_found INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS cop_capture_media (
+ capture_id BIGINT NOT NULL,
+ camera_id BIGINT NOT NULL,
+ sample_key TEXT NOT NULL,
+ media_id BIGINT NOT NULL REFERENCES cop_media(id),
+ lease_token TEXT NOT NULL,
+ PRIMARY KEY(capture_id,camera_id,sample_key),
+ FOREIGN KEY(capture_id,camera_id) REFERENCES cop_capture_channels(capture_id,camera_id)
+);
+
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_mode TEXT NOT NULL DEFAULT 'unavailable';
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_host TEXT;
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_rtsp_port INTEGER;

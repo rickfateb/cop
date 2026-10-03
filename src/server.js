@@ -11,7 +11,7 @@ import { startIngestWorker } from './ingest.js';
 import { createGatewayIngest } from './gateway.js';
 import { startFraudAutomation, verifySignedMedia } from './fraud.js';
 import { createInvestigation, listInvestigations, investigationDetail } from './investigations.js';
-import {createCapture,listCaptures} from './captures.js';
+import {createCapture,listCaptures,listCaptureMedia} from './captures.js';
 import { startInvestigationWorker } from './investigation-worker.js';
 import {listReviews,reviewIncident} from './review.js';
 import { createSdkApi, validatePlaybackConfig } from './sdk-connector.js';
@@ -320,6 +320,8 @@ async function route(req, res) {
     if(req.method==='POST')return json(res,201,{capture:await createCapture(pool,await body(req),req.copUser?.email||'admin')});
     return json(res,405,{error:'Método não permitido.'});
   }
+  const captureMedia=url.pathname.match(/^\/api\/captures\/([1-9]\d*)\/channels\/([1-9]\d*)\/media$/);
+  if(captureMedia&&req.method==='GET')return json(res,200,{media:await listCaptureMedia(pool,captureMedia[1],captureMedia[2],url.searchParams.get('offset'))});
   const investigationMatch=url.pathname.match(/^\/api\/investigations\/([1-9]\d*)$/);
   if(investigationMatch&&req.method==='GET') return investigationById(res,investigationMatch[1]);
   const mediaMatch = url.pathname.match(/^\/api\/media\/([1-9]\d*)$/);
