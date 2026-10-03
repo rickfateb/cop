@@ -214,6 +214,30 @@ CREATE INDEX IF NOT EXISTS cop_investigations_unit_time_idx ON cop_investigation
 CREATE INDEX IF NOT EXISTS cop_investigations_status_idx ON cop_investigations(status,created_at);
 CREATE INDEX IF NOT EXISTS cop_investigation_channels_status_idx ON cop_investigation_channels(status,investigation_id);
 
+CREATE TABLE IF NOT EXISTS cop_capture_requests (
+ id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ unit_id BIGINT NOT NULL REFERENCES cop_units(id),
+ dvr_id BIGINT NOT NULL REFERENCES cop_dvrs(id),
+ start_at TIMESTAMPTZ NOT NULL,
+ end_at TIMESTAMPTZ NOT NULL CHECK(end_at>start_at),
+ capture_mode TEXT NOT NULL CHECK(capture_mode IN ('continuous','motion','ai')),
+ media_type TEXT NOT NULL CHECK(media_type IN ('photo','video','all')),
+ status TEXT NOT NULL CHECK(status IN ('queued','waiting_connector')),
+ investigation_id BIGINT REFERENCES cop_investigations(id),
+ requested_by TEXT,
+ last_error TEXT,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS cop_capture_channels (
+ capture_id BIGINT NOT NULL REFERENCES cop_capture_requests(id) ON DELETE CASCADE,
+ camera_id BIGINT NOT NULL REFERENCES cop_cameras(id),
+ channel INTEGER NOT NULL CHECK(channel BETWEEN 1 AND 32),
+ sampling_config JSONB NOT NULL,
+ PRIMARY KEY(capture_id,camera_id),
+ UNIQUE(capture_id,channel)
+);
+CREATE INDEX IF NOT EXISTS cop_capture_requests_created_idx ON cop_capture_requests(created_at DESC,id DESC);
+
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_mode TEXT NOT NULL DEFAULT 'unavailable';
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_host TEXT;
 ALTER TABLE cop_dvrs ADD COLUMN IF NOT EXISTS playback_rtsp_port INTEGER;

@@ -82,3 +82,31 @@ Em **Resumos**, a seção de revisão apresenta as próximas análises com açõ
 Em **Investigações**, o botão da ocorrência Cerejeiras prepara 02/10/2026, 19h10–19h16, com os canais ativos cadastrados no DVR da unidade. Confirme o relógio do DVR antes de criar a solicitação; o horário do formulário usa São Paulo. O conector de playback precisa estar conectado para recuperar os vídeos. Preparar a janela não baixa nem solicita gravações.
 
 Alertas definitivos das ocorrências graves dependem de **Confirmar ocorrência para alerta**; **Descartar alerta** impede sua liberação. A confirmação mantém o envio no horário previamente configurado. O resultado de roupa sozinho nunca cria alerta grave. As APIs de revisão usam a autenticação administrativa existente.
+
+## Captura por período
+
+Em **Investigações → Captura por período**, informe unidade/DVR, data inicial e final
+(no relógio de São Paulo), um ou mais canais, tipo **Modo Contínuo / Apenas movimento /
+IA** e mídia **Foto / Vídeo / Todos**. O botão de Cerejeiras prepara canal 2, fotos por
+movimento desde 10/09/2026; registrar continua sendo uma ação separada.
+
+`POST /api/captures` aceita `unit_id`, `dvr_id`, `start_at`, `end_at` (RFC3339 com
+fuso), `channels`, `capture_mode` (`continuous`, `motion`, `ai`) e `media_type`
+(`photo`, `video`, `all`). `GET /api/captures` lista as solicitações e seus canais.
+Ambas as rotas usam a autenticação administrativa e proteção de origem do portal.
+Datas invertidas, canais inativos e DVR de outra unidade são recusados.
+Os parâmetros de captura de cada câmera são copiados para a solicitação; alterações
+posteriores no cadastro não mudam os intervalos registrados nessa solicitação.
+
+IA significa eventos registrados pela IA do DVR, sem iniciar análise das mídias no
+COP. Apenas movimento exige eventos detectados pelo DVR; não usa inferência visual
+como substituição. Foto não baixa vídeos para extrair quadros. Todos exige ambas
+as mídias, sem reduzir automaticamente o pedido a vídeo.
+
+O receptor atual executa somente Modo Contínuo + Vídeo, período passado de até
+120 minutos, em DVR com RTSP direto ou SDK Auto Registro configurado. Esses pedidos
+criam uma investigação na mesma transação e acompanham seu status. Demais combinações
+são salvas como **Aguardando conector**, com a limitação explicitada na tela. Ainda
+não existe um consumidor para esses pedidos: sua execução exige atualização do
+receptor para a mídia/evento/período solicitado. Nenhuma foto histórica, detecção de
+movimento/IA ou busca de vários dias é anunciada como executada por esse formulário.

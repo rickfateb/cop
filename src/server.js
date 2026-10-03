@@ -11,6 +11,7 @@ import { startIngestWorker } from './ingest.js';
 import { createGatewayIngest } from './gateway.js';
 import { startFraudAutomation, verifySignedMedia } from './fraud.js';
 import { createInvestigation, listInvestigations, investigationDetail } from './investigations.js';
+import {createCapture,listCaptures} from './captures.js';
 import { startInvestigationWorker } from './investigation-worker.js';
 import {listReviews,reviewIncident} from './review.js';
 import { createSdkApi, validatePlaybackConfig } from './sdk-connector.js';
@@ -265,7 +266,7 @@ async function route(req, res) {
     ok: true, ingest: { ok: ingestWorker.state.ok, last_scan_at: ingestWorker.state.last_scan_at }
   });
   if (!url.pathname.startsWith('/api/')) {
-    const files = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
+    const files = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/captures-ui.js': ['captures-ui.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
     const entry = files[url.pathname];
     if (!entry || req.method !== 'GET') return json(res, 404, { error: 'Não encontrado.' });
     const contents = await readFile(path.join(root, 'public', entry[0]));
@@ -314,6 +315,11 @@ async function route(req, res) {
   const reviewMatch=url.pathname.match(/^\/api\/fraud\/incidents\/([1-9]\d*)\/review$/);
   if(reviewMatch && req.method==='POST')return json(res,200,await reviewIncident(pool,reviewMatch[1],(await body(req)).status));
   if (url.pathname === '/api/investigations') return investigationsApi(req,res,url);
+  if (url.pathname === '/api/captures') {
+    if(req.method==='GET')return json(res,200,{captures:await listCaptures(pool,{limit:url.searchParams.get('limit')})});
+    if(req.method==='POST')return json(res,201,{capture:await createCapture(pool,await body(req),req.copUser?.email||'admin')});
+    return json(res,405,{error:'Método não permitido.'});
+  }
   const investigationMatch=url.pathname.match(/^\/api\/investigations\/([1-9]\d*)$/);
   if(investigationMatch&&req.method==='GET') return investigationById(res,investigationMatch[1]);
   const mediaMatch = url.pathname.match(/^\/api\/media\/([1-9]\d*)$/);

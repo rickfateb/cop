@@ -1,5 +1,6 @@
+import {captureForm,captureList,buildCapturePayload,saoPauloInput} from './captures-ui.js';
 const $ = s => document.querySelector(s);
-const state = { user: null, data: null, unitId: null, edit: null, objectUrls: [], view: 'config', summaries: null, investigations: null, reviews: [], clothingOnly: false };
+const state = { user: null, data: null, unitId: null, edit: null, objectUrls: [], view: 'config', summaries: null, investigations: null, captures: [], captureDraft: null, reviews: [], clothingOnly: false };
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]);
 const toast = (message, error = false) => { const el = $('#toast'); el.textContent = message; el.className = `show${error ? ' error' : ''}`; clearTimeout(toast.timer); toast.timer = setTimeout(() => el.className = '', 4000); };
 const accessLabel = mode => ({ sftp_push:'SFTP · DVR envia', ftp_push:'FTP · gateway', direct_http:'HTTP/RTSP direto', intelbras_cloud:'Intelbras Cloud · homologação', agent:'Agente legado', vpn:'VPN legada' }[mode] || mode);
@@ -45,8 +46,40 @@ function setView(view) {
   $('#show-investigations').classList.toggle('active', investigations);
 }
 async function loadInvestigations() {
-  state.investigations = await api('investigations?limit=100');
+  saveCaptureDraft();
+  const [investigations,captures]=await Promise.all([api('investigations?limit=100'),api('captures?limit=100')]);
+  state.investigations=investigations;state.captures=captures.captures;
   renderInvestigations();
+}
+function saveCaptureDraft() {
+  const form=$('#capture-form');if(!form)return;
+  const fd=new FormData(form);
+  state.captureDraft={unitId:fd.get('unit_id'),dvrId:fd.get('dvr_id'),start:fd.get('start_at'),end:fd.get('end_at'),mode:fd.get('capture_mode'),mediaType:fd.get('media_type'),channels:fd.getAll('channels').map(Number)};
+}
+function renderCaptureSection() {
+  $('#capture-section').innerHTML=`<h3>Captura por período</h3><p>Escolha as datas, os canais, o tipo de evento e a mídia que deseja guardar.</p><button class="ghost" id="prepare-cerejeiras-photos">Preparar Cerejeiras · canal 2 · fotos por movimento desde 10/09/2026</button>${captureForm(state.data,state.captureDraft||{unitId:state.unitId})}${captureList(state.captures)}`;
+  const form=$('#capture-form');
+  form.addEventListener('change',event=>{
+    saveCaptureDraft();
+    if(event.target.name==='unit_id'){state.captureDraft.dvrId=null;state.captureDraft.channels=null;renderCaptureSection();}
+    else if(event.target.name==='dvr_id'){state.captureDraft.channels=null;renderCaptureSection();}
+  });
+  $('#capture-all-channels').addEventListener('click',()=>{for(const checkbox of form.querySelectorAll('input[name="channels"]'))checkbox.checked=true;saveCaptureDraft();});
+  $('#prepare-cerejeiras-photos').addEventListener('click',()=>{
+    const unit=state.data.units.find(u=>u.active&&u.name.toLowerCase().includes('cerejeiras'));
+    const dvr=state.data.dvrs.find(d=>d.active&&d.unit_id===unit?.id);
+    if(!dvr||!state.data.cameras.some(c=>c.active&&c.dvr_id===dvr.id&&c.channel===2))return toast('Cerejeiras não possui canal 2 ativo cadastrado.',true);
+    state.captureDraft={unitId:unit.id,dvrId:dvr.id,start:'2026-09-10T00:00',end:saoPauloInput(),mode:'motion',mediaType:'photo',channels:[2]};renderCaptureSection();
+    toast('Solicitação preparada. Confira as datas antes de registrar.');
+  });
+  form.addEventListener('submit',async event=>{
+    event.preventDefault();saveCaptureDraft();const button=form.querySelector('button[type="submit"]');button.disabled=true;
+    try{
+      const result=await api('captures','POST',buildCapturePayload(state.captureDraft));
+      toast(result.capture.status==='waiting_connector'?'Solicitação registrada; aguardando suporte do receptor.':'Captura registrada na fila de recuperação.');
+      await loadInvestigations();
+    }catch(error){toast(error.message,true);}finally{button.disabled=false;}
+  });
 }
 function investigationForm() {
   const units=state.data?.units||[];
@@ -68,13 +101,15 @@ function investigationForm() {
 function renderInvestigations() {
   const rows=state.investigations?.investigations||[];
   $('#investigations-view').innerHTML=`<div class="section-head"><div><div class="eyebrow">INVESTIGAÇÕES</div><h2>Investigação retroativa</h2><p>Solicite uma janela histórica do DVR e múltiplos canais para reconstrução posterior.</p><button class="ghost" id="prepare-cerejeiras">Preparar ocorrência Cerejeiras · 02/10 · 19h10–19h16</button></div><button class="ghost" id="refresh-investigations">Atualizar</button></div>
+  <section id="capture-section"></section><hr><h3>Investigação por ocorrência</h3>
   ${investigationForm()}
   <div class="investigation-list">${rows.length?rows.map(row=>`<article class="summary-card">
     <div class="summary-head"><div><strong>${escapeHtml(row.unit_name)} · ${dateTime(row.reference_at)}</strong><small>${escapeHtml(row.reason)}</small></div><span class="status-badge">${escapeHtml(row.status)}</span></div>
     <div class="summary-meta"><span>Janela: -${Math.round(row.window_before_seconds/60)} min / +${Math.round(row.window_after_seconds/60)} min</span><span>Fonte: ${escapeHtml(row.source)}</span><span>Conector: ${escapeHtml(row.connector_status)}</span></div>
     <div class="channel-checks compact">${(row.channels||[]).map(ch=>`<span>Canal ${ch.channel} · ${escapeHtml(ch.camera_name||'Câmera')} · ${escapeHtml(ch.status)}${ch.last_error?' · '+escapeHtml(ch.last_error):''}${ch.retrieved_media_id?` <button class="ghost" data-investigation-video="${ch.retrieved_media_id}">Assistir</button>`:''}</span>`).join('')}</div>
   </article>`).join(''):'<div class="empty"><strong>Nenhuma investigação criada.</strong>Use o formulário acima para registrar uma busca retroativa.</div>'}</div>`;
-  for(const button of document.querySelectorAll('[data-investigation-video]'))button.addEventListener('click',async()=>{try{const response=await fetch(`/api/media/${button.dataset.investigationVideo}`,{credentials:'same-origin'});if(!response.ok)throw Error('Não foi possível carregar o vídeo.');const url=URL.createObjectURL(await response.blob());state.objectUrls.push(url);const video=document.createElement('video');video.controls=true;video.src=url;video.style.maxWidth='100%';button.replaceWith(video);}catch(e){toast(e.message,true);}});
+  renderCaptureSection();
+  $('#investigations-view').onclick=async event=>{const button=event.target.closest('[data-investigation-video]');if(!button)return;try{const response=await fetch(`/api/media/${button.dataset.investigationVideo}`,{credentials:'same-origin'});if(!response.ok)throw Error('Não foi possível carregar o vídeo.');const url=URL.createObjectURL(await response.blob());state.objectUrls.push(url);const video=document.createElement('video');video.controls=true;video.src=url;video.style.maxWidth='100%';button.replaceWith(video);}catch(e){toast(e.message,true);}};
   $('#refresh-investigations')?.addEventListener('click',()=>loadInvestigations().catch(e=>toast(e.message,true)));
   $('#investigation-form')?.addEventListener('submit',submitInvestigation);
   $('#prepare-cerejeiras')?.addEventListener('click',()=>{
@@ -264,7 +299,7 @@ function payload(form, type) {
       analysis_mode:value(form,'analysis_mode'), analysis_after_seconds:number(form,'analysis_after_seconds'),
       retention_days:number(form,'retention_days') } };
 }
-function resetSession(){state.objectUrls.forEach(URL.revokeObjectURL);state.objectUrls=[];state.user=null;state.data=null;if($('#editor').open)$('#editor').close();$('#workspace').hidden=true;$('#login').hidden=false;$('#logout').hidden=true;$('#current-user').textContent='Acesso administrativo';}
+function resetSession(){state.objectUrls.forEach(URL.revokeObjectURL);state.objectUrls=[];state.user=null;state.data=null;state.captures=[];state.captureDraft=null;if($('#editor').open)$('#editor').close();$('#workspace').hidden=true;$('#login').hidden=false;$('#logout').hidden=true;$('#current-user').textContent='Acesso administrativo';}
 async function enterWorkspace(user){state.user=user;await refresh();$('#login').hidden=true;$('#workspace').hidden=false;$('#logout').hidden=false;$('#current-user').textContent=user.name||user.email;$('#google-login').replaceChildren();}
 let googleScript;
 async function initLogin(){try{const session=await api('auth/session');if(session.user){await enterWorkspace(session.user);return;}$('#login-message').textContent='Entre com sua conta Google para continuar.';if(!googleScript)googleScript=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='https://accounts.google.com/gsi/client';script.async=true;script.onload=resolve;script.onerror=()=>reject(Error('Não foi possível carregar o login Google. Recarregue a página.'));document.head.appendChild(script);});await googleScript;window.google.accounts.id.initialize({client_id:session.client_id,nonce:session.nonce,auto_select:false,callback:async response=>{try{const result=await api('auth/google','POST',{credential:response.credential});await enterWorkspace(result.user);}catch(e){$('#login-message').textContent=e.message;toast(e.message,true);}}});$('#google-login').replaceChildren();window.google.accounts.id.renderButton($('#google-login'),{theme:'outline',size:'large',text:'signin_with',width:Math.min(360,$('#google-login').clientWidth||320),locale:'pt-BR'});}catch(e){$('#login-message').textContent=e.message;}}
@@ -299,4 +334,3 @@ async function renderArchive(){
  $('#refresh-archive').addEventListener('click',()=>renderArchive().catch(e=>toast(e.message,true)));
 }
 $('#show-archive').addEventListener('click',()=>{setView('archive');renderArchive().catch(e=>toast(e.message,true));});
-
